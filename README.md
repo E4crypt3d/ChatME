@@ -6,6 +6,7 @@ A terminal-based roleplay engine using free OpenRouter models with automatic mem
 
 - **Multi-model failover** - Automatically switches to backup models if one fails
 - **Memory consolidation** - Summarizes conversation history to stay within context limits
+- **Character memory** - Tracks characters and relationships mentioned in conversation
 - **Rich terminal UI** - Beautiful colored output with Rich library
 - **Character persistence** - Remembers story context across sessions
 
@@ -40,13 +41,50 @@ Edit the settings in `main.py`:
 | `DEBUG` | false | Enable debug output |
 
 
-
 ## Usage
 
 1. Run `python main.py`
 2. Enter your character description when prompted
 3. Type your messages to roleplay
 4. Type `exit` or `quit` to end
+5. Use `/memory` to view tracked characters and relationships
+
+## How to Enter Your Character
+
+When prompted "Who am I roleplaying as?", enter your character in this format:
+
+```
+Name, description
+```
+
+### Best Format Examples:
+
+**Simple:**
+```
+Wizard, an old mage with a long white beard
+```
+
+**Detailed:**
+```
+Arthur, a noble knight of the Round Table, brave and honorable
+```
+
+**Fantasy:**
+```
+Merlin, the most powerful wizard in the realm, ancient and wise
+```
+
+**Modern:**
+```
+Detective Cole, a gritty noir detective in 1940s LA
+```
+
+The first line sets your character's name and description. The AI will use this to roleplay as your character.
+
+## Commands
+
+- `/memory` - View tracked characters and relationships
+- `exit` or `/exit` - Quit the session
 
 ## Troubleshooting
 
