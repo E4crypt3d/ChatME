@@ -29,6 +29,58 @@ OPENROUTER_API_KEY=your_api_key_here
 python main.py
 ```
 
+## First Run
+
+When you first run `python main.py`:
+
+1. Enter your character when prompted (format: "Name, description")
+2. Enter your name (the player character)
+3. Optionally enter an opening scene
+4. Start roleplaying!
+
+### Character Format Tips
+
+The best results come from describing your character with **name, relationship, and personality**:
+
+```
+Kelly, your wife, a celebrity from Hollywood who's protective and jealous
+```
+
+```
+John, my husband, a 35-year-old businessman who works too much
+```
+
+```
+Merlin, the ancient wizard who mentors me in magic
+```
+
+**Key tips:**
+- Start with the **character name** (e.g., "Kelly")
+- Add **relationship to you** (e.g., "your wife", "my husband", "my mentor")
+- Include **personality traits** (e.g., "protective", "jealous", "wise")
+- Keep descriptions **2-3 sentences** for best results
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `/help` | Show this help screen |
+| `/memory` | View tracked characters and relationships |
+| `/status` | Show current scene, mood, and settings |
+| `/lore` | Show story lore |
+| `/narrate` | Toggle narration mode (describes scene + actions + dialogue) |
+| `/retry` | Regenerate last response |
+| `/set scene <desc>` | Set current scene context |
+| `/set mood <desc>` | Set character's mood |
+| `/set name <name>` | Rename the character mid-session |
+| `/set player <name>` | Rename the player label |
+| `/save [name]` | Save current session |
+| `/load <name>` | Load a saved session |
+| `/sessions` | List all saved sessions |
+| `/clear` | Reset conversation history (keeps persona) |
+| `/debug` | Toggle debug output |
+| `exit` or `/exit` | Quit the session |
+
 ## Configuration
 
 Edit the settings in `main.py`:
@@ -39,52 +91,6 @@ Edit the settings in `main.py`:
 | `KEEP_RECENT_TURNS` | 10 | Recent turns to keep after condensation |
 | `REPLY_MAX_TOKENS` | 400 | Max tokens per response |
 | `DEBUG` | false | Enable debug output |
-
-
-## Usage
-
-1. Run `python main.py`
-2. Enter your character description when prompted
-3. Type your messages to roleplay
-4. Type `exit` or `quit` to end
-5. Use `/memory` to view tracked characters and relationships
-
-## How to Enter Your Character
-
-When prompted "Who am I roleplaying as?", enter your character in this format:
-
-```
-Name, description
-```
-
-### Best Format Examples:
-
-**Simple:**
-```
-Wizard, an old mage with a long white beard
-```
-
-**Detailed:**
-```
-Arthur, a noble knight of the Round Table, brave and honorable
-```
-
-**Fantasy:**
-```
-Merlin, the most powerful wizard in the realm, ancient and wise
-```
-
-**Modern:**
-```
-Detective Cole, a gritty noir detective in 1940s LA
-```
-
-The first line sets your character's name and description. The AI will use this to roleplay as your character.
-
-## Commands
-
-- `/memory` - View tracked characters and relationships
-- `exit` or `/exit` - Quit the session
 
 ## Troubleshooting
 

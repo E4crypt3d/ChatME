@@ -462,12 +462,14 @@ class RoleplayEngine:
             timeout=self.REQUEST_TIMEOUT,
         )
         self.models: list[str] = [
+            "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
             "arcee-ai/trinity-large-preview:free",
             "stepfun/step-3.5-flash:free",
             "z-ai/glm-4.5-air:free",
             "arcee-ai/trinity-mini:free",
+            "nvidia/nemotron-3-super-120b-a12b:free",
             "nvidia/nemotron-3-nano-30b-a3b:free",
-            "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+            "liquid/lfm-2.5-1.2b-instruct:free",
         ]
         self.summary_models: list[str] = [
             "arcee-ai/trinity-mini:free",
