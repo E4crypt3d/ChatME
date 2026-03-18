@@ -115,11 +115,14 @@ class RoleplayEngine:
             if self.narrate_mode
             else ""
         )
+        player_block = f"\nPLAYER IDENTITY:\n- Player name: {self.player_label}\n- The player's messages describe what {self.player_label} does"
         return (
             f"CHARACTER IDENTITY (permanent — never changes):\n{persona_desc}"
-            f"{scene_block}{mood_block}\n\n"
+            f"{player_block}{scene_block}{mood_block}\n\n"
             "RULES:\n"
-            "- Stay in character at all times\n"
+            "- Stay in character as YOUR character (the one described above)\n"
+            "- NEVER write or narrate the player's actions or thoughts\n"
+            "- You only describe YOUR character's actions, dialogue, thoughts, and reactions\n"
             "- Never break character or mention being AI\n"
             "- Use *italics* for actions/thoughts, **bold** for emphasis\n"
             "- Keep responses natural and concise (2-4 sentences)\n"
@@ -989,6 +992,8 @@ class RoleplayEngine:
             ).strip()
             if scene_raw:
                 self.scene = scene_raw
+                # Add opening scene to lore as the starting context
+                self.lore = f"The story begins: {scene_raw}"
 
             self.memory.add_character(
                 self.persona_name,
@@ -1077,7 +1082,10 @@ class RoleplayEngine:
                     content = self._get_reply()
                     if content and len(content.strip()) >= 5:
                         self._last_assistant_content = content
-                        self.history.append({"role": "assistant", "content": content})
+                        labeled_content = f"{self.persona_name}: {content}"
+                        self.history.append(
+                            {"role": "assistant", "content": labeled_content}
+                        )
                     else:
                         self.console.print("[dim red]retry failed[/dim red]")
                 else:
@@ -1129,7 +1137,8 @@ class RoleplayEngine:
             # normal turn
             self._extract_info_from_message(user_input, is_user=True)
             # append user message first so it's in kept window if condense fires
-            self.history.append({"role": "user", "content": user_input})
+            labeled_input = f"{self.player_label}: {user_input}"
+            self.history.append({"role": "user", "content": labeled_input})
             self._check_and_condense()
             self.console.print(Rule(style="dim"))
             self.console.print(f"[bold magenta]{self.persona_name}[/bold magenta]")
@@ -1144,7 +1153,8 @@ class RoleplayEngine:
             self._extract_info_from_message(content, is_user=False)
             self._update_system_memory()
             self._last_assistant_content = content
-            self.history.append({"role": "assistant", "content": content})
+            labeled_content = f"{self.persona_name}: {content}"
+            self.history.append({"role": "assistant", "content": labeled_content})
             self._msg_count += 1
 
             if self._msg_count % 20 == 0:
