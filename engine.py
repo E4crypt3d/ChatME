@@ -396,10 +396,18 @@ class RoleplayEngine:
             return None
         lines = []
         for m in messages:
-            role = "Assistant" if m["role"] == "assistant" else "User"
+            # Skip messages that don't have required fields
+            if not isinstance(m, dict):
+                continue
+            role = m.get("role")
+            if not role:
+                continue
+            role_str = "Assistant" if role == "assistant" else "User"
             cleaned = re.sub(r"\*[^*]+\*", "", m.get("content", "")).strip()
             if cleaned:
-                lines.append(f"[{role}]: {cleaned}")
+                lines.append(f"[{role_str}]: {cleaned}")
+        if not lines:
+            return self._memory_fallback_summary(messages)
         transcript = "\n".join(lines)
         if len(transcript) > 6000:
             transcript = transcript[-6000:]
@@ -462,39 +470,50 @@ class RoleplayEngine:
         return "\n".join(bullets) if bullets else "• Story continued."
 
     def condense_logic(self) -> None:
-        self.console.print(
-            "\n[dim italic yellow]⚡ consolidating memories…[/dim italic yellow]"
-        )
-        keep_n = self.KEEP_RECENT_PAIRS * 2
-        if len(self.history) <= keep_n + 1:
-            return
-        to_summarise = self.history[1:-keep_n]
-        if not to_summarise:
-            self.history = [self.history[0]] + self.history[-keep_n:]
-            return
-        new_summary = self._summarise(to_summarise)
-        if new_summary:
-            # combine: first condense replaces, later ones prepend
-            if self._condense_count == 0 or self.lore == "The story is just beginning.":
-                combined_lore = new_summary
-            else:
-                combined_lore = f"{self.lore}\n\n{new_summary}"
-            # cap lore size to avoid confusing weak models
-            if len(combined_lore) > 1200:
-                combined_lore = combined_lore[-1200:]
-        else:
-            combined_lore = (
-                self.lore
-                if self.lore != "The story is just beginning."
-                else "• Story began."
-            )
-        self._update_system_lore(combined_lore)
-        self.history = [self.history[0]] + self.history[-keep_n:]
-        self._condense_count += 1
-        if self.debug:
+        try:
             self.console.print(
-                f"[dim]condense #{self._condense_count}, {self._convo_msg_count()} msgs remain[/dim]"
+                "\n[dim italic yellow]⚡ consolidating memories…[/dim italic yellow]"
             )
+            keep_n = self.KEEP_RECENT_PAIRS * 2
+            if len(self.history) <= keep_n + 1:
+                return
+            to_summarise = self.history[1:-keep_n]
+            if not to_summarise:
+                self.history = [self.history[0]] + self.history[-keep_n:]
+                return
+            new_summary = self._summarise(to_summarise)
+            if new_summary:
+                # combine: first condense replaces, later ones prepend
+                if (
+                    self._condense_count == 0
+                    or self.lore == "The story is just beginning."
+                ):
+                    combined_lore = new_summary
+                else:
+                    combined_lore = f"{self.lore}\n\n{new_summary}"
+                # cap lore size to avoid confusing weak models
+                if len(combined_lore) > 1200:
+                    combined_lore = combined_lore[-1200:]
+            else:
+                combined_lore = (
+                    self.lore
+                    if self.lore != "The story is just beginning."
+                    else "• Story began."
+                )
+            self._update_system_lore(combined_lore)
+            self.history = [self.history[0]] + self.history[-keep_n:]
+            self._condense_count += 1
+            if self.debug:
+                self.console.print(
+                    f"[dim]condense #{self._condense_count}, {self._convo_msg_count()} msgs remain[/dim]"
+                )
+        except Exception as e:
+            if self.debug:
+                self.console.print(f"[dim red]condense error: {e}[/dim red]")
+            # Fallback: just trim history without summarization
+            keep_n = self.KEEP_RECENT_PAIRS * 2
+            if len(self.history) > keep_n + 1:
+                self.history = [self.history[0]] + self.history[-keep_n:]
 
     def _check_and_condense(self) -> None:
         if self._should_condense():
