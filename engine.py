@@ -56,7 +56,6 @@ class RoleplayEngine:
         self._init_state()
 
     def _init_client(self) -> None:
-        # Use override API key if provided, otherwise fall back to env var
         api_key = self._override_api_key or os.environ.get("OPENROUTER_API_KEY")
         if not api_key:
             self.console.print("[bold red]OPENROUTER_API_KEY not set[/bold red]")
@@ -66,12 +65,11 @@ class RoleplayEngine:
             api_key=api_key,
             timeout=self.REQUEST_TIMEOUT,
         )
-        # Use override model if provided, otherwise use default model list
         if self._override_model:
             self.models: list[str] = [self._override_model]
             self.summary_models: list[str] = [self._override_model]
         else:
-            self.models: list[str] = [
+            self.models = [
                 "arcee-ai/trinity-large-preview:free",
                 "stepfun/step-3.5-flash:free",
                 "z-ai/glm-4.5-air:free",
@@ -81,7 +79,7 @@ class RoleplayEngine:
                 "liquid/lfm-2.5-1.2b-instruct:free",
                 "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
             ]
-            self.summary_models: list[str] = [
+            self.summary_models = [
                 "arcee-ai/trinity-mini:free",
                 "z-ai/glm-4.5-air:free",
                 "stepfun/step-3.5-flash:free",
@@ -99,40 +97,100 @@ class RoleplayEngine:
         self.memory = WorldMemory()
         self._msg_count = 0
         self._condense_count = 0
-        # scene/mood context for system prompt
         self.scene: str = ""
         self.mood: str = ""
         self._last_assistant_content: str = ""
-        # assistant describes scene+action, not just dialogue
+        self._recent_assistant_excerpts: list[str] = []
         self.narrate_mode: bool = False
+
+    def _apply_session_data(self, data: dict) -> None:
+        self.persona_name = data.get("persona_name", "Character")
+        self.persona_desc = data.get("persona_desc", "")
+        self.player_label = data.get("player_label", "You")
+        self.lore = data.get("lore", "")
+        self.history = data.get("history", [])
+        self.memory = WorldMemory.from_dict(data.get("memory", {}))
+        self._condense_count = data.get("condense_count", 0)
+        self.scene = data.get("scene", "")
+        self.mood = data.get("mood", "")
+        self.narrate_mode = data.get("narrate_mode", False)
+        self._recent_assistant_excerpts = data.get("recent_excerpts", [])
+
+    def _parse_directives(self, user_input: str) -> tuple[str, str]:
+        directive_pattern = re.compile(r"\*([^*]+)\*")
+        directives = directive_pattern.findall(user_input)
+        cleaned_speech = directive_pattern.sub("", user_input).strip()
+        return cleaned_speech, " ".join(directives)
+
+    def _build_few_shot(self) -> str:
+        # one example so small models immediately get the format
+        name = self.persona_name
+        player = self.player_label
+        if self.narrate_mode:
+            return (
+                f"\nEXAMPLE (follow this format exactly):\n"
+                f"{player}: Hey, you okay?\n"
+                f'{name}: *{name} glances up slowly, eyes tired.* "Yeah... just thinking." '
+                f"*{name} shifts to make room on the bench.*\n"
+            )
+        return (
+            f"\nEXAMPLE (follow this format exactly):\n"
+            f"{player}: Hey, you okay?\n"
+            f'{name}: *glances up* "Yeah, just thinking." *shifts slightly*\n'
+        )
+
+    def _build_no_repeat_block(self) -> str:
+        if not self._recent_assistant_excerpts:
+            return ""
+        lines = "\n".join(f"- {e}" for e in self._recent_assistant_excerpts[-4:])
+        return f"\nDO NOT reuse these openings or phrases:\n{lines}\n"
 
     def _build_system_content(self, persona_desc: str, lore: str) -> str:
         world_info = self.memory.format_world()
-        scene_block = f"\nCURRENT SCENE: {self.scene}" if self.scene else ""
-        mood_block = f"\nCHARACTER MOOD: {self.mood}" if self.mood else ""
-        narrate_block = (
-            "\n- Write responses as a narrator: describe the scene, actions, AND dialogue together"
-            if self.narrate_mode
-            else ""
+        scene_block = f"\nSCENE: {self.scene}" if self.scene else ""
+        mood_block = f"\nMOOD: {self.mood}" if self.mood else ""
+
+        if self.narrate_mode:
+            style_rule = (
+                "Write as narrator+character: describe actions, surroundings, AND dialogue together. "
+                "3-5 sentences. Use *italics* for actions."
+            )
+        else:
+            style_rule = (
+                "Reply as the character only. 2-3 sentences max. "
+                "Use *italics* for actions/thoughts, dialogue in quotes."
+            )
+
+        no_repeat = self._build_no_repeat_block()
+        few_shot = self._build_few_shot()
+
+        lore_block = ""
+        if lore and lore != "The story is just beginning.":
+            lore_block = f"\nBACKSTORY (already happened, do not re-enact):\n{lore}\n"
+
+        world_block = (
+            f"\nKNOWN CHARACTERS:\n{world_info}\n" if world_info.strip() else ""
         )
-        player_block = f"\nPLAYER IDENTITY:\n- Player name: {self.player_label}\n- The player's messages describe what {self.player_label} does"
+
+        # character identity first, rules second, examples third, context last
+        # small models weight the top and bottom — keep identity+rules at top, lore at bottom
         return (
-            f"CHARACTER IDENTITY (permanent — never changes):\n{persona_desc}"
-            f"{player_block}{scene_block}{mood_block}\n\n"
-            "RULES:\n"
-            "- Stay in character as YOUR character (the one described above)\n"
-            "- NEVER write or narrate the player's actions or thoughts\n"
-            "- You only describe YOUR character's actions, dialogue, thoughts, and reactions\n"
-            "- Never break character or mention being AI\n"
-            "- Use *italics* for actions/thoughts, **bold** for emphasis\n"
-            "- Keep responses natural and concise (2-4 sentences)\n"
-            "- Your PRIMARY task: respond directly to the LAST USER MESSAGE\n"
-            "- NEVER repeat a phrase, sentence, or action you already used this conversation\n"
-            "- NEVER reuse the same opening action (e.g. 'smiles softly') more than once\n"
-            f"- STORY SO FAR is background only — do not re-enact or echo it{narrate_block}\n\n"
-            f"CHARACTER DATABASE:\n{CHARACTERS_MARKER}\n{world_info}\n{CHARACTERS_MARKER}\n\n"
-            "STORY SO FAR (past events — these already happened, do not revisit them):\n"
-            f"{LORE_MARKER}\n{lore}\n{LORE_MARKER}"
+            f"You are {persona_desc}\n"
+            f"Your name: {self.persona_name}\n"
+            f"The player is: {self.player_label}{scene_block}{mood_block}\n\n"
+            f"RULES:\n"
+            f"- Stay in character. Never say you are an AI.\n"
+            f"- Only write your own character's words and actions.\n"
+            f"- Never write what {self.player_label} does or says.\n"
+            f"- When player writes *action*, you must perform that action.\n"
+            f"- Example: 'hey *Karen smiles*' means you should smile\n"
+            f"- Example: '*Karen thinks he's handsome*' means you have that thought\n"
+            f"- {style_rule}\n"
+            f"- Always respond to the very last message.\n"
+            f"{no_repeat}"
+            f"{few_shot}"
+            f"{lore_block}"
+            f"{world_block}"
         )
 
     def _rebuild_system(self) -> None:
@@ -155,14 +213,20 @@ class RoleplayEngine:
 
     def _update_system_lore(self, new_lore: str) -> None:
         self.lore = new_lore
-        # rebuild keeps scene/mood/narrate in sync
         self._rebuild_system()
 
     def _update_system_memory(self) -> None:
         self._patch_system_marker(CHARACTERS_MARKER, self.memory.format_world())
 
+    def _track_excerpt(self, content: str) -> None:
+        # rolling list of recent openings fed into the no-repeat block
+        first = content.strip().split("\n")[0][:80]
+        if first:
+            self._recent_assistant_excerpts.append(first)
+            self._recent_assistant_excerpts = self._recent_assistant_excerpts[-6:]
+        self._rebuild_system()
+
     def _extract_info_from_message(self, text: str, is_user: bool) -> None:
-        # explicit introduction patterns
         for pat in [
             r"(?:i am|i'm|my name is)\s+([A-Z][a-z]{1,})",
             r"(?:this is|meet|introduce[d]?)\s+([A-Z][a-z]{1,})",
@@ -172,7 +236,6 @@ class RoleplayEngine:
                 if is_valid_name(m.group(1)):
                     self.memory.add_character(m.group(1), context=text[:80])
 
-        # age pattern
         for m in re.finditer(
             r"\b([A-Z][a-z]{1,})\s+is\s+(\d{1,3})\s*(?:years?\s*old)?", text
         ):
@@ -182,7 +245,6 @@ class RoleplayEngine:
                 if c and not c.age:
                     c.age = age
 
-        # "[Name] is my/his/her [relation]"
         for m in re.finditer(
             r"\b([A-Z][a-z]{1,})\s+is\s+(?:my|his|her|their|our)\s+(\w+)", text
         ):
@@ -193,7 +255,6 @@ class RoleplayEngine:
                     self.persona_name, name, rel, context=text[:80]
                 )
 
-        # "my/his/her [relation] [Name]"
         for m in re.finditer(
             r"(?:my|his|her|their|our)\s+(\w+)\s+([A-Z][a-z]{1,})", text
         ):
@@ -204,7 +265,6 @@ class RoleplayEngine:
                     self.persona_name, name, rel, context=text[:80]
                 )
 
-        # "[Name] and [Name] are [word]"
         for m in re.finditer(
             r"\b([A-Z][a-z]{1,})\s+and\s+([A-Z][a-z]{1,})\s+are\s+(\w+)", text
         ):
@@ -214,7 +274,6 @@ class RoleplayEngine:
                 self.memory.add_character(n2, context=text[:80])
                 self.memory.add_relationship(n1, n2, rt, context=text[:80])
 
-        # location after spatial preposition
         known_names = {c.lower() for c in self.memory.characters}
         words = text.split()
         for i, word in enumerate(words):
@@ -326,7 +385,6 @@ class RoleplayEngine:
     def _consume_stream(self, response_obj) -> str:
         parts: list[str] = []
         try:
-            # Live auto-refreshes display
             with Live(
                 Panel("", border_style="magenta"),
                 auto_refresh=True,
@@ -351,7 +409,6 @@ class RoleplayEngine:
             if self.debug:
                 self.console.print(f"[dim red]stream error: {e}[/dim red]")
         content = "".join(parts)
-        # only print panel if we got content
         if content.strip():
             self.console.print(Panel(Markdown(content), border_style="magenta"))
         return content
@@ -361,7 +418,6 @@ class RoleplayEngine:
         if resp is None:
             return ""
         content = self._consume_stream(resp)
-        # force different model for short/empty response
         if len(content.strip()) < self.MIN_RESPONSE_LEN:
             if used_model:
                 self._failed_models.add(used_model)
@@ -379,7 +435,6 @@ class RoleplayEngine:
 
     def _should_condense(self) -> bool:
         n = self._convo_msg_count()
-        # need new messages before re-condensing
         keep_n = self.KEEP_RECENT_PAIRS * 2
         threshold = (
             (keep_n + self.CONDENSE_THRESHOLD_MSGS)
@@ -399,7 +454,6 @@ class RoleplayEngine:
             return None
         lines = []
         for m in messages:
-            # Skip messages that don't have required fields
             if not isinstance(m, dict):
                 continue
             role = m.get("role")
@@ -420,17 +474,14 @@ class RoleplayEngine:
             {
                 "role": "system",
                 "content": (
-                    "You write brief story notes for a roleplay session. "
-                    "Output 3-5 bullet points only. "
-                    "Summarise what HAPPENED in past tense — events, decisions, emotional beats. "
-                    "Do NOT describe the current state or scene (that is handled elsewhere). "
-                    "Do NOT invent any detail not explicitly in the transcript. "
-                    "Do NOT quote dialogue. No headers, no preamble."
+                    "Write 3-5 bullet points summarising what happened. "
+                    "Past tense only. Events and decisions only. "
+                    "No dialogue quotes. No current scene description. No preamble."
                 ),
             },
             {
                 "role": "user",
-                "content": f"Characters: {known_chars}\n\nTranscript of past events:\n{transcript}",
+                "content": f"Characters: {known_chars}\n\n{transcript}",
             },
         ]
         resp, model_used = self.call_with_failover(
@@ -438,7 +489,6 @@ class RoleplayEngine:
         )
         if resp:
             raw = (resp.choices[0].message.content or "").strip()
-            # reject if summary is longer than transcript
             if raw and len(raw) < len(transcript) * 0.8:
                 if self.debug:
                     self.console.print(f"[dim]summary via {model_used}[/dim]")
@@ -467,7 +517,7 @@ class RoleplayEngine:
         for msg in [m["content"] for m in messages if m.get("role") == "assistant"][
             -2:
         ]:
-            clean = re.sub(r"\*[^*]+\*", "").strip()[:100]
+            clean = re.sub(r"\*[^*]+\*", "", msg).strip()[:100]
             if clean:
                 bullets.append(f"• Recent: {clean}")
         return "\n".join(bullets) if bullets else "• Story continued."
@@ -486,7 +536,6 @@ class RoleplayEngine:
                 return
             new_summary = self._summarise(to_summarise)
             if new_summary:
-                # combine: first condense replaces, later ones prepend
                 if (
                     self._condense_count == 0
                     or self.lore == "The story is just beginning."
@@ -494,7 +543,6 @@ class RoleplayEngine:
                     combined_lore = new_summary
                 else:
                     combined_lore = f"{self.lore}\n\n{new_summary}"
-                # cap lore size to avoid confusing weak models
                 if len(combined_lore) > 1200:
                     combined_lore = combined_lore[-1200:]
             else:
@@ -513,7 +561,6 @@ class RoleplayEngine:
         except Exception as e:
             if self.debug:
                 self.console.print(f"[dim red]condense error: {e}[/dim red]")
-            # Fallback: just trim history without summarization
             keep_n = self.KEEP_RECENT_PAIRS * 2
             if len(self.history) > keep_n + 1:
                 self.history = [self.history[0]] + self.history[-keep_n:]
@@ -523,47 +570,30 @@ class RoleplayEngine:
             self.condense_logic()
 
     def _handle_set_command(self, args: str) -> None:
-        """
-        /set scene <desc>   — set current scene context
-        /set mood <desc>    — set character's current mood
-        /set name <name>    — rename the character mid-session
-        /set player <name>  — rename the player label
-        """
         parts = args.strip().split(maxsplit=1)
         if len(parts) < 2:
             self.console.print(
-                "[yellow]Usage: /set <option> <value>[/yellow]\n"
-                "[dim]Options:[/dim]\n"
-                "  • [cyan]/set name <name>[/cyan]    - Set character name\n"
-                "  • [cyan]/set player <name>[/cyan]  - Set player name\n"
-                "  • [cyan]/set scene <desc>[/cyan]   - Set current scene\n"
-                "  • [cyan]/set mood <desc>[/cyan]    - Set character mood\n\n"
-                "[dim]Example: /set scene in a dark forest[/dim]"
+                "[yellow]usage: /set <name|player|scene|mood> <value>[/yellow]"
             )
             return
         key, value = parts[0].lower(), parts[1].strip()
         if key == "scene":
             self.scene = value
             self._rebuild_system()
-            self.console.print(f"[green]✓ Scene set:[/green] {value}")
+            self.console.print(f"[green]✓ scene:[/green] {value}")
         elif key == "mood":
             self.mood = value
             self._rebuild_system()
-            self.console.print(f"[green]✓ Mood set:[/green] {value}")
+            self.console.print(f"[green]✓ mood:[/green] {value}")
         elif key == "name":
             old = self.persona_name
             self.persona_name = value.capitalize()
-            self.console.print(
-                f"[green]✓ Character renamed:[/green] {old} → {self.persona_name}"
-            )
+            self.console.print(f"[green]✓ renamed:[/green] {old} → {self.persona_name}")
         elif key == "player":
             self.player_label = value.capitalize()
-            self.console.print(f"[green]✓ Player name set:[/green] {self.player_label}")
+            self.console.print(f"[green]✓ player:[/green] {self.player_label}")
         else:
-            self.console.print(
-                f"[yellow]Unknown option: {key}[/yellow]\n"
-                "[dim]Valid options: name, player, scene, mood[/dim]"
-            )
+            self.console.print(f"[yellow]unknown: {key}[/yellow]")
 
     def _get_session_path(self, name: str) -> Path:
         self.SESSIONS_DIR.mkdir(exist_ok=True)
@@ -587,6 +617,7 @@ class RoleplayEngine:
                     "scene": self.scene,
                     "mood": self.mood,
                     "narrate_mode": self.narrate_mode,
+                    "recent_excerpts": self._recent_assistant_excerpts,
                     "saved_at": datetime.datetime.now().isoformat(),
                 },
                 indent=2,
@@ -602,20 +633,10 @@ class RoleplayEngine:
             direct = Path(name)
             path = direct if direct.exists() else path
         if not path.exists():
-            self.console.print(f"[bold red]session not found:[/bold red] {name}")
+            self.console.print(f"[bold red]not found:[/bold red] {name}")
             return False
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            self.persona_name = data.get("persona_name", "Character")
-            self.persona_desc = data.get("persona_desc", "")
-            self.player_label = data.get("player_label", "You")
-            self.lore = data.get("lore", "")
-            self.history = data.get("history", [])
-            self.memory = WorldMemory.from_dict(data.get("memory", {}))
-            self._condense_count = data.get("condense_count", 0)
-            self.scene = data.get("scene", "")
-            self.mood = data.get("mood", "")
-            self.narrate_mode = data.get("narrate_mode", False)
+            self._apply_session_data(json.loads(path.read_text(encoding="utf-8")))
             self.console.print(f"[bold green]✓ loaded:[/bold green] {path}")
             return True
         except Exception as e:
@@ -623,11 +644,9 @@ class RoleplayEngine:
             return False
 
     def _list_sessions(self) -> list[dict]:
-        """List all saved sessions and return their data."""
         self.SESSIONS_DIR.mkdir(exist_ok=True)
-        files = sorted(self.SESSIONS_DIR.glob("*.json"))
         sessions = []
-        for f in files:
+        for f in sorted(self.SESSIONS_DIR.glob("*.json")):
             try:
                 d = json.loads(f.read_text(encoding="utf-8"))
                 sessions.append(
@@ -652,10 +671,9 @@ class RoleplayEngine:
         return sessions
 
     def _show_sessions_table(self) -> None:
-        """Display sessions as a table."""
         sessions = self._list_sessions()
         if not sessions:
-            self.console.print("[dim]No saved sessions found.[/dim]")
+            self.console.print("[dim]no saved sessions[/dim]")
             return
         t = Table(title="💾 Saved Sessions", show_header=True)
         t.add_column("#", style="dim", width=4)
@@ -665,156 +683,38 @@ class RoleplayEngine:
         t.add_column("Saved", style="dim")
         for i, s in enumerate(sessions, 1):
             t.add_row(
-                str(i),
-                s["name"],
-                s["persona"],
-                s["scene"] or "(none)",
-                s["saved"][:16],
+                str(i), s["name"], s["persona"], s["scene"] or "(none)", s["saved"][:16]
             )
         self.console.print(t)
 
-    def load_session_interactive(self) -> bool:
-        """Load a session interactively with a menu."""
-        sessions = self._list_sessions()
-        if not sessions:
-            self.console.print("[yellow]No saved sessions found.[/yellow]")
-            self.console.print(
-                "[dim]Start a new character with /new or just type a name.[/dim]"
-            )
-            return False
-
-        # Show table
-        self._show_sessions_table()
-
-        # Ask for selection
-        choice = Prompt.ask(
-            "\n[bold green]Choose a session[/bold green] [dim](number or name, enter to cancel)[/dim]",
-            default="",
-        ).strip()
-
-        if not choice:
-            self.console.print("[dim]Cancelled.[/dim]")
-            return False
-
-        # Try to find matching session
-        selected_session = None
-
-        # Check if it's a number
-        if choice.isdigit():
-            idx = int(choice) - 1
-            if 0 <= idx < len(sessions):
-                selected_session = sessions[idx]
-        else:
-            # Search by name (partial match)
-            choice_lower = choice.lower()
-            for s in sessions:
-                if choice_lower in s["name"].lower():
-                    selected_session = s
-                    break
-
-        if not selected_session:
-            self.console.print(f"[yellow]Session not found: {choice}[/yellow]")
-            return False
-
-        # Load the session
-        path = selected_session["path"]
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            self.persona_name = data.get("persona_name", "Character")
-            self.persona_desc = data.get("persona_desc", "")
-            self.player_label = data.get("player_label", "You")
-            self.lore = data.get("lore", "")
-            self.history = data.get("history", [])
-            self.memory = WorldMemory.from_dict(data.get("memory", {}))
-            self._condense_count = data.get("condense_count", 0)
-            self.scene = data.get("scene", "")
-            self.mood = data.get("mood", "")
-            self.narrate_mode = data.get("narrate_mode", False)
-
-            self.console.print(
-                f"\n[bold green]✓ Loaded:[/bold green] {selected_session['name']}"
-            )
-            self.console.print(f"   [bold]Character:[/bold] {self.persona_name}")
-            if self.scene:
-                self.console.print(f"   [bold]Scene:[/bold] {self.scene}")
-
-            # Ask if user wants to edit
-            edit = Prompt.ask(
-                "\n[bold yellow]Edit character?[/bold yellow] [dim](y/N)[/dim]",
-                default="n",
-            ).lower()
-
-            if edit == "y":
-                # Edit name
-                new_name = Prompt.ask(
-                    f"[bold]Character name[/bold] [dim](current: {self.persona_name})[/dim]",
-                    default=self.persona_name,
-                ).strip()
-                if new_name:
-                    self.persona_name = new_name.capitalize()
-
-                # Edit description
-                new_desc = Prompt.ask(
-                    "[bold]Character description[/bold] [dim](enter to keep current)[/dim]",
-                    default=self.persona_desc,
-                ).strip()
-                if new_desc:
-                    self.persona_desc = new_desc
-
-                # Rebuild system prompt with new info
-                self._rebuild_system()
-                self.console.print(f"[green]✓ Character updated![/green]")
-
-            return True
-        except Exception as e:
-            self.console.print(f"[bold red]Load failed:[/bold red] {e}")
-            return False
-
     def _load_session_by_path(self, path: Path) -> bool:
-        """Load a session from a path."""
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            self.persona_name = data.get("persona_name", "Character")
-            self.persona_desc = data.get("persona_desc", "")
-            self.player_label = data.get("player_label", "You")
-            self.lore = data.get("lore", "")
-            self.history = data.get("history", [])
-            self.memory = WorldMemory.from_dict(data.get("memory", {}))
-            self._condense_count = data.get("condense_count", 0)
-            self.scene = data.get("scene", "")
-            self.mood = data.get("mood", "")
-            self.narrate_mode = data.get("narrate_mode", False)
-
-            self.console.print(f"\n[bold green]✓ Loaded session![/bold green]")
-            self.console.print(f"   [bold]Character:[/bold] {self.persona_name}")
+            self._apply_session_data(json.loads(path.read_text(encoding="utf-8")))
+            self.console.print(
+                f"\n[bold green]✓ loaded:[/bold green] {self.persona_name}"
+            )
             if self.scene:
-                self.console.print(f"   [bold]Scene:[/bold] {self.scene}")
+                self.console.print(f"   scene: {self.scene}")
             return True
         except Exception as e:
-            self.console.print(f"[bold red]Load failed:[/bold red] {e}")
+            self.console.print(f"[bold red]load failed:[/bold red] {e}")
             return False
 
     def _edit_character_prompts(self) -> None:
-        """Prompt user to edit character name and description."""
-        # Edit name
         new_name = Prompt.ask(
-            f"[bold]Character name[/bold] [dim](current: {self.persona_name})[/dim]",
+            f"[bold]name[/bold] [dim](current: {self.persona_name})[/dim]",
             default=self.persona_name,
         ).strip()
         if new_name:
             self.persona_name = new_name.capitalize()
-
-        # Edit description
         new_desc = Prompt.ask(
-            "[bold]Character description[/bold] [dim](enter to keep current)[/dim]",
+            "[bold]description[/bold] [dim](enter to keep)[/dim]",
             default=self.persona_desc,
         ).strip()
         if new_desc:
             self.persona_desc = new_desc
-
-        # Rebuild system prompt
         self._rebuild_system()
-        self.console.print(f"[green]✓ Character updated![/green]")
+        self.console.print("[green]✓ updated[/green]")
 
     def _show_memory(self) -> None:
         self.console.print(
@@ -824,175 +724,112 @@ class RoleplayEngine:
         )
 
     def _show_status(self) -> None:
-        """Display current session status."""
-        model_info = self._last_working_model or "(trying...)"
         lines = [
-            f"[bold]Character:[/bold]   {self.persona_name}",
+            f"[bold]Character:[/bold]  {self.persona_name}",
             f"[bold]Player:[/bold]     {self.player_label}",
-            f"[bold]Model:[/bold]      {model_info}",
-            f"[bold]Scene:[/bold]      {self.scene or '(none set)'}",
-            f"[bold]Mood:[/bold]       {self.mood or '(none set)'}",
-            f"[bold]Narration:[/bold]  {'enabled' if self.narrate_mode else 'disabled'}",
+            f"[bold]Model:[/bold]      {self._last_working_model or '(trying...)'}",
+            f"[bold]Scene:[/bold]      {self.scene or '(none)'}",
+            f"[bold]Mood:[/bold]       {self.mood or '(none)'}",
+            f"[bold]Narration:[/bold]  {'on' if self.narrate_mode else 'off'}",
             f"[bold]Messages:[/bold]   {self._convo_msg_count()}",
             f"[bold]Condenses:[/bold]  {self._condense_count}",
         ]
         self.console.print(
-            Panel("\n".join(lines), title="📊 Session Status", border_style="cyan")
+            Panel("\n".join(lines), title="📊 status", border_style="cyan")
         )
 
     def _show_help(self) -> None:
-        """Display help information with command usage."""
         self.console.print(
             Panel(
-                "[bold cyan]╔══════════════════════════════════════════════════════════════╗[/bold cyan]\n"
-                "[bold cyan]║                    ChatME COMMANDS                       ║[/bold cyan]\n"
-                "[bold cyan]╚══════════════════════════════════════════════════════════════╝[/bold cyan]\n\n"
-                "[bold green]📖 GENERAL[/bold green]\n"
-                "  [cyan]/help[/cyan]               Show this help message\n"
-                "  [cyan]/status[/cyan]             Show session status (character, model, scene)\n"
-                "  [cyan]/memory[/cyan]  [dim]/mem[/dim]      View characters, relationships & locations\n"
-                "  [cyan]/lore[/cyan]               View story history/lore\n\n"
-                "[bold green]🎭 CHARACTER[/bold green]\n"
-                "  [cyan]/set name <name>[/cyan]    Rename your character [dim]e.g. /set name Alice[/dim]\n"
-                "  [cyan]/set player <name>[/cyan]  Set player's display name [dim]e.g. /set player Bob[/dim]\n"
-                "  [cyan]/set scene <desc>[/cyan]   Set current scene [dim]e.g. /set scene in a dark forest[/dim]\n"
-                "  [cyan]/set mood <desc>[/cyan]    Set character mood [dim]e.g. /set mood angry[/dim]\n"
-                "  [cyan]/narrate[/cyan]           Toggle narration mode (descriptive responses)\n\n"
-                "[bold green]💬 CONVERSATION[/bold green]\n"
-                "  [cyan]/retry[/cyan]              Regenerate last AI response\n"
-                "  [cyan]/clear[/cyan]              Clear message history (keeps character info)\n\n"
-                "[bold green]💾 SESSIONS[/bold green]\n"
-                "  [cyan]/load[/cyan]  [dim]/new[/dim]          Load or start new character (interactive)\n"
-                "  [cyan]/save [name][/cyan]        Save session [dim]e.g. /save or /save my_adventure[/dim]\n"
-                "  [cyan]/sessions[/cyan]           List all saved sessions\n\n"
-                "[bold green]🔧 DEBUGGING[/bold green]\n"
-                "  [cyan]/debug[/cyan]              Toggle debug mode (shows API errors)\n\n"
-                "[bold green]🚪 EXIT[/bold green]\n"
-                "  [cyan]exit[/cyan] or [cyan]quit[/cyan]    End session (prompts to save)",
-                title="❓ Help",
+                "[bold green]GENERAL[/bold green]\n"
+                "  /help  /status  /memory  /lore\n\n"
+                "[bold green]CHARACTER[/bold green]\n"
+                "  /set name <n>    /set player <n>\n"
+                "  /set scene <desc>    /set mood <desc>\n"
+                "  /narrate\n\n"
+                "[bold green]CONVERSATION[/bold green]\n"
+                "  /retry  /clear\n\n"
+                "[bold green]SESSIONS[/bold green]\n"
+                "  /load  /new  /sessions  /save [name]\n\n"
+                "[bold green]OTHER[/bold green]\n"
+                "  /debug    exit / quit",
+                title="❓ help",
                 border_style="yellow",
             )
         )
 
-    def run(self) -> None:
-        self.console.clear()
-        self.console.print(
-            Panel(
-                "[bold white]╔═══════════════════════════════════════════════════════════╗[/bold white]\n"
-                "[bold white]║            ★ ChatME ROLEPLAY ENGINE ★                   ║[/bold white]\n"
-                "[bold white]║                                                           ║[/bold white]\n"
-                "[bold white]║   Type [cyan]/help[/cyan] anytime for commands                        ║[/bold white]\n"
-                "[bold white]║   Type [cyan]/status[/cyan] to see your current settings             ║[/bold white]\n"
-                "[bold white]║   Type [cyan]/memory[/cyan] to view tracked characters & locations   ║[/bold white]\n"
-                "[bold white]╚═══════════════════════════════════════════════════════════╝[/bold white]",
-                style="bold blue",
-                expand=False,
-            )
-        )
+    def _startup_flow(self) -> bool:
+        # session picker or new character, returns false to quit
+        sessions = self._list_sessions()
+
+        if not sessions:
+            self.console.print("\n[bold]no sessions — creating new character[/bold]\n")
+        else:
+            self.console.print("\n[bold]saved sessions:[/bold]")
+            self._show_sessions_table()
+            self.console.print("\n  ENTER = new  |  number or name = load")
+            choice = Prompt.ask("\n[bold green]>[/bold green]", default="").strip()
+
+            if choice:
+                selected = None
+                if choice.isdigit():
+                    idx = int(choice) - 1
+                    if 0 <= idx < len(sessions):
+                        selected = sessions[idx]
+                else:
+                    for s in sessions:
+                        if choice.lower() in s["name"].lower():
+                            selected = s
+                            break
+
+                if not selected:
+                    self.console.print(f"[yellow]not found: {choice}[/yellow]")
+                    return False
+
+                if self._load_session_by_path(selected["path"]):
+                    if (
+                        Prompt.ask(
+                            "[bold yellow]edit character?[/bold yellow] [dim](y/N)[/dim]",
+                            default="n",
+                        ).lower()
+                        == "y"
+                    ):
+                        self._edit_character_prompts()
+                    return True
+                return False
 
         while True:
-            # Show sessions and ask what to do
-            sessions = self._list_sessions()
-
-            # If no sessions, skip the menu and go straight to creating new
-            if not sessions:
-                self.console.print(
-                    "\n[bold]Starting fresh! Creating a new character...[/bold]\n"
-                )
-            else:
-                self.console.print("\n[bold]Saved sessions:[/bold]")
-                self._show_sessions_table()
-                self.console.print(
-                    "\n   [cyan]• Press ENTER[/cyan] to create a new character"
-                )
-                self.console.print("   [cyan]• Type a number[/cyan] to load a session")
-                self.console.print(
-                    "   [cyan]• Type a name[/cyan] to search for a session"
-                )
-                choice = Prompt.ask(
-                    "\n[bold green]Your choice?[/bold green]",
-                    default="",
-                ).strip()
-
-                if choice:
-                    loaded = False
-                    # Try to load by number or name
-                    if choice.isdigit():
-                        idx = int(choice) - 1
-                        if 0 <= idx < len(sessions):
-                            s = sessions[idx]
-                            if self._load_session_by_path(s["path"]):
-                                if (
-                                    Prompt.ask(
-                                        "\n[bold yellow]Edit character?[/bold yellow] [dim](y/N)[/dim]",
-                                        default="n",
-                                    ).lower()
-                                    == "y"
-                                ):
-                                    self._edit_character_prompts()
-                                loaded = True
-                    else:
-                        # Try loading by name
-                        for s in sessions:
-                            if choice.lower() in s["name"].lower():
-                                if self._load_session_by_path(s["path"]):
-                                    if (
-                                        Prompt.ask(
-                                            "\n[bold yellow]Edit character?[/bold yellow] [dim](y/N)[/dim]",
-                                            default="n",
-                                        ).lower()
-                                        == "y"
-                                    ):
-                                        self._edit_character_prompts()
-                                    loaded = True
-                                    break
-                                break
-                    if loaded:
-                        break
-                    self.console.print(
-                        f"[yellow]Could not find session: {choice}[/yellow]"
-                    )
-                    continue
-                # User pressed enter - create new
-                self.console.print("\n[bold]Creating new character...[/bold]\n")
-
-            # Ask for name
             persona_name_input = Prompt.ask(
-                "[bold green]Character name?[/bold green]"
+                "[bold green]character name?[/bold green]"
             ).strip()
             if not persona_name_input:
-                self.console.print("[yellow]Please enter a character name[/yellow]")
+                self.console.print("[yellow]name required[/yellow]")
                 continue
 
             self.persona_name = persona_name_input.capitalize()
 
-            # Ask for description
             raw = Prompt.ask(
-                "[bold green]Character description?[/bold green]"
-                " [dim](personality, appearance, backstory)[/dim]"
+                "[bold green]description?[/bold green] [dim](personality, appearance, backstory)[/dim]"
             ).strip()
             if not raw:
-                self.console.print("[yellow]Please enter a description[/yellow]")
+                self.console.print("[yellow]description required[/yellow]")
                 continue
 
             self.persona_desc = raw
 
-            # Player name
             player_raw = Prompt.ask(
-                "[bold green]Your name?[/bold green] [dim](enter to skip)[/dim]",
+                "[bold green]your name?[/bold green] [dim](enter to skip)[/dim]",
                 default="",
             ).strip()
             if player_raw:
                 self.player_label = player_raw.capitalize()
 
-            # Optional scene
             scene_raw = Prompt.ask(
-                "[bold green]Opening scene?[/bold green] [dim](enter to skip)[/dim]",
+                "[bold green]opening scene?[/bold green] [dim](enter to skip)[/dim]",
                 default="",
             ).strip()
             if scene_raw:
                 self.scene = scene_raw
-                # Add opening scene to lore as the starting context
                 self.lore = f"The story begins: {scene_raw}"
 
             self.memory.add_character(
@@ -1006,19 +843,15 @@ class RoleplayEngine:
                     "content": self._build_system_content(self.persona_desc, self.lore),
                 }
             )
-            break
+            return True
 
-        mode_tag = " [dim]📖 narration enabled[/dim]" if self.narrate_mode else ""
+    def _chat_loop(self) -> None:
+        mode_tag = " [dim]📖 narration on[/dim]" if self.narrate_mode else ""
         self.console.print(
-            f"\n[bold green]✓ Ready to roleplay![/bold green]\n\n"
-            f"   [bold]Character:[/bold] [magenta]{self.persona_name}[/magenta]{mode_tag}\n"
-            f"   [bold]Player:[/bold]    [cyan]{self.player_label}[/cyan]\n"
-            f"   [bold]Scene:[/bold]     {self.scene or '(none set)'}\n\n"
-            f"   [dim]Quick tips:[/dim]\n"
-            f"   • Type [cyan]/help[/cyan] for all commands\n"
-            f"   • Type [cyan]/memory[/cyan] to see tracked characters\n"
-            f"   • Type [cyan]/save[/cyan] to save your progress\n"
-            f"   • Type [cyan]exit[/cyan] when done\n"
+            f"\n[bold green]✓ ready[/bold green]  "
+            f"[magenta]{self.persona_name}[/magenta]{mode_tag}  "
+            f"[dim]player: {self.player_label}  scene: {self.scene or 'none'}[/dim]\n"
+            f"[dim]/help for commands  •  exit to quit[/dim]\n"
         )
 
         while True:
@@ -1058,20 +891,17 @@ class RoleplayEngine:
             if cmd == "/status":
                 self._show_status()
                 continue
-
             if cmd == "/lore":
                 self.console.print(Panel(self.lore, title="lore", border_style="green"))
                 continue
-
             if cmd == "/narrate":
                 self.narrate_mode = not self.narrate_mode
                 self._rebuild_system()
-                state = "on" if self.narrate_mode else "off"
-                self.console.print(f"[dim green]narration mode {state}[/dim green]")
+                self.console.print(
+                    f"[dim green]narration {'on' if self.narrate_mode else 'off'}[/dim green]"
+                )
                 continue
-
             if cmd == "/retry":
-                # pop last assistant message to re-ask
                 if self.history and self.history[-1]["role"] == "assistant":
                     self.history.pop()
                     self.console.print("[dim yellow]regenerating…[/dim yellow]")
@@ -1082,69 +912,67 @@ class RoleplayEngine:
                     content = self._get_reply()
                     if content and len(content.strip()) >= 5:
                         self._last_assistant_content = content
-                        labeled_content = f"{self.persona_name}: {content}"
+                        self._track_excerpt(content)
                         self.history.append(
-                            {"role": "assistant", "content": labeled_content}
+                            {
+                                "role": "assistant",
+                                "content": f"{self.persona_name}: {content}",
+                            }
                         )
                     else:
                         self.console.print("[dim red]retry failed[/dim red]")
                 else:
                     self.console.print("[dim]nothing to retry[/dim]")
                 continue
-
             if cmd.startswith("/set"):
                 self._handle_set_command(user_input[4:])
                 continue
-
             if cmd.startswith("/save"):
                 parts = user_input.split(maxsplit=1)
-                if len(parts) > 1:
-                    self.save_session(parts[1].strip())
-                else:
-                    self.save_session()
+                self.save_session(parts[1].strip() if len(parts) > 1 else None)
                 continue
-
             if cmd.startswith("/load") or cmd == "/new":
-                # Show sessions list and let user choose
-                if self.load_session_interactive():
-                    break
-                continue
-
+                if self._startup_flow():
+                    self._chat_loop()
+                return
             if cmd == "/sessions":
                 self._show_sessions_table()
                 continue
-
             if cmd == "/clear":
                 if (
                     Prompt.ask(
-                        "[yellow]Clear all messages?[/yellow] [dim](y/N)[/dim]",
-                        default="n",
+                        "[yellow]clear history?[/yellow] [dim](y/N)[/dim]", default="n"
                     ).lower()
                     == "y"
                 ):
                     self.history = [self.history[0]] if self.history else []
                     self._condense_count = 0
-                    self.console.print("[green]✓ History cleared[/green]")
+                    self._recent_assistant_excerpts = []
+                    self.console.print("[green]✓ cleared[/green]")
                 continue
-
             if cmd == "/debug":
                 self.debug = not self.debug
                 self.console.print(
-                    f"[green]✓ Debug mode:[/green] {'enabled' if self.debug else 'disabled'}"
+                    f"[green]✓ debug:[/green] {'on' if self.debug else 'off'}"
                 )
                 continue
 
-            # normal turn
             self._extract_info_from_message(user_input, is_user=True)
-            # append user message first so it's in kept window if condense fires
-            labeled_input = f"{self.player_label}: {user_input}"
+            clean_speech, directives = self._parse_directives(user_input)
+            if directives:
+                labeled_input = (
+                    f"{self.player_label}: {clean_speech}\n"
+                    f"[ACTION FOR {self.persona_name.upper()}]: {directives}"
+                )
+            else:
+                labeled_input = f"{self.player_label}: {user_input}"
+
             self.history.append({"role": "user", "content": labeled_input})
             self._check_and_condense()
             self.console.print(Rule(style="dim"))
             self.console.print(f"[bold magenta]{self.persona_name}[/bold magenta]")
 
             content = self._get_reply()
-
             if not content or len(content.strip()) < 5:
                 self.console.print("[dim red]empty response — try again[/dim red]")
                 self.history.pop()
@@ -1153,8 +981,10 @@ class RoleplayEngine:
             self._extract_info_from_message(content, is_user=False)
             self._update_system_memory()
             self._last_assistant_content = content
-            labeled_content = f"{self.persona_name}: {content}"
-            self.history.append({"role": "assistant", "content": labeled_content})
+            self._track_excerpt(content)
+            self.history.append(
+                {"role": "assistant", "content": f"{self.persona_name}: {content}"}
+            )
             self._msg_count += 1
 
             if self._msg_count % 20 == 0:
@@ -1162,21 +992,25 @@ class RoleplayEngine:
                     "[dim yellow]💾 /save to keep this session[/dim yellow]"
                 )
 
+    def run(self) -> None:
+        self.console.clear()
+        self.console.print(
+            Panel(
+                "[bold white]★ ChatME ROLEPLAY ENGINE ★[/bold white]\n"
+                "[dim]/help for commands  •  /status for settings  •  /memory for world[/dim]",
+                style="bold blue",
+                expand=False,
+            )
+        )
+        while self._startup_flow():
+            self._chat_loop()
+
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="ChatME Roleplay Engine")
-    parser.add_argument(
-        "--model",
-        "-m",
-        help="Model to use (e.g., cognitivecomputations/dolphin-mistral-24b-venice-edition:free)",
-    )
-    parser.add_argument(
-        "--key",
-        "-k",
-        help="OpenRouter API key for this session (overrides OPENROUTER_API_KEY env var)",
-    )
+    parser.add_argument("--model", "-m", help="model override")
+    parser.add_argument("--key", "-k", help="api key override")
     args = parser.parse_args()
-
     RoleplayEngine(model=args.model, api_key=args.key).run()

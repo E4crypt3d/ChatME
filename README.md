@@ -11,6 +11,7 @@ A terminal-based roleplay engine using free OpenRouter models with automatic mem
 - **Character persistence** - Remembers story context across sessions
 - **Interactive session management** - Easy load/save with visual selection menu
 - **CLI options** - Specify model and API key from command line
+- **Inline character control** - Direct the AI character's actions using *asterisks*
 
 ## Setup
 
@@ -37,10 +38,10 @@ python main.py
 python main.py --model <model_name> --key <api_key>
 ```
 
-| Option | Short | Description |
-|--------|-------|-------------|
-| `--model` | `-m` | Specify a model to use |
-| `--key` | `-k` | Provide API key for this session |
+| Option    | Short | Description                      |
+| --------- | ----- | -------------------------------- |
+| `--model` | `-m`  | Specify a model to use           |
+| `--key`   | `-k`  | Provide API key for this session |
 
 Examples:
 ```bash
@@ -64,10 +65,10 @@ When you first run `python main.py`:
    - Type a **name** to search for a session
 
 2. If creating new, enter:
-   - Character name
+   - Character name (the AI-controlled character)
    - Character description (personality, appearance, backstory)
-   - Your name (optional)
-   - Opening scene (optional)
+   - Your name (optional - this is you, the player)
+   - Opening scene (optional - sets the initial story context)
 
 3. Start roleplaying!
 
@@ -88,26 +89,54 @@ A mysterious thief from the streets, quick-witted and sneaky
 - Add **appearance hints** if desired (e.g., "wears a red cloak")
 - Keep descriptions **2-3 sentences** for best results
 
+## Inline Character Control
+
+You can directly control the AI character's actions, thoughts, and emotions using **asterisks** in your messages.
+
+### Syntax
+
+```
+*YourCharacter does something*
+*YourCharacter thinks about something*
+*YourCharacter feels something*
+```
+
+### Examples
+
+```
+Hey Karen, want to swim? *Karen looks at you and thinks how hot he is*
+```
+
+```
+*Karen smiles warmly* It's so nice to see you!
+```
+
+```
+*Karen blushes* I... I didn't expect that...
+```
+
+The text inside asterisks is extracted and sent as a clear directive to the AI, ensuring your character reacts exactly as you want.
+
 ## Commands
 
-| Command | Description |
-|---------|-------------|
-| `/help` | Show help screen with all commands |
-| `/memory` or `/mem` | View tracked characters and relationships |
-| `/status` | Show current character, player, model, scene, mood |
-| `/lore` | Show story history/lore |
-| `/narrate` | Toggle narration mode (describes scene + actions + dialogue) |
-| `/retry` | Regenerate last AI response |
-| `/clear` | Reset conversation history (asks for confirmation) |
-| `/debug` | Toggle debug output |
-| `/set scene <desc>` | Set current scene context |
-| `/set mood <desc>` | Set character's mood |
-| `/set name <name>` | Rename the character |
-| `/set player <name>` | Rename the player |
-| `/save [name]` | Save session (optional custom name) |
-| `/load` or `/new` | Load saved session or create new (interactive) |
-| `/sessions` | List all saved sessions |
-| `exit` or `/exit` | Quit (asks to save first) |
+| Command              | Description                                                  |
+| -------------------- | ------------------------------------------------------------ |
+| `/help`              | Show help screen with all commands                           |
+| `/memory` or `/mem`  | View tracked characters and relationships                    |
+| `/status`            | Show current character, player, model, scene, mood           |
+| `/lore`              | Show story history/lore                                      |
+| `/narrate`           | Toggle narration mode (describes scene + actions + dialogue) |
+| `/retry`             | Regenerate last AI response                                  |
+| `/clear`             | Reset conversation history (asks for confirmation)           |
+| `/debug`             | Toggle debug output                                          |
+| `/set scene <desc>`  | Set current scene context                                    |
+| `/set mood <desc>`   | Set character's mood                                         |
+| `/set name <name>`   | Rename the character                                         |
+| `/set player <name>` | Rename the player                                            |
+| `/save [name]`       | Save session (optional custom name)                          |
+| `/load` or `/new`    | Load saved session or create new (interactive)               |
+| `/sessions`          | List all saved sessions                                      |
+| `exit` or `/exit`    | Quit (asks to save first)                                    |
 
 ## Session Management
 
@@ -126,10 +155,10 @@ A mysterious thief from the streets, quick-witted and sneaky
 
 The app now uses CLI arguments. For environment configuration:
 
-| Environment Variable | Description |
-|---------------------|-------------|
-| `OPENROUTER_API_KEY` | Your OpenRouter API key |
-| `DEBUG` | Set to "true" for debug logs |
+| Environment Variable | Description                  |
+| -------------------- | ---------------------------- |
+| `OPENROUTER_API_KEY` | Your OpenRouter API key      |
+| `DEBUG`              | Set to "true" for debug logs |
 
 ## Troubleshooting
 
@@ -137,3 +166,4 @@ The app now uses CLI arguments. For environment configuration:
 - **Empty responses**: Try `/narrate` mode or use `/retry` to regenerate
 - **Debug mode**: Set `DEBUG=true` in `.env` for detailed logs
 - **API key issues**: Use `--key` option to provide a key for a single session
+- **Character confusion**: Use the inline control feature (`*character does X*`) to explicitly direct the AI character's actions
