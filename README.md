@@ -9,6 +9,8 @@ A terminal-based roleplay engine using free OpenRouter models with automatic mem
 - **Character memory** - Tracks characters and relationships mentioned in conversation
 - **Rich terminal UI** - Beautiful colored output with Rich library
 - **Character persistence** - Remembers story context across sessions
+- **Interactive session management** - Easy load/save with visual selection menu
+- **CLI options** - Specify model and API key from command line
 
 ## Setup
 
@@ -29,71 +31,109 @@ OPENROUTER_API_KEY=your_api_key_here
 python main.py
 ```
 
+## Command Line Options
+
+```
+python main.py --model <model_name> --key <api_key>
+```
+
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--model` | `-m` | Specify a model to use |
+| `--key` | `-k` | Provide API key for this session |
+
+Examples:
+```bash
+# Use a specific model
+python main.py -m cognitivecomputations/dolphin-mistral-24b-venice-edition:free
+
+# Use a custom API key
+python main.py --key sk-xxxxxxx
+
+# Both options together
+python main.py -m "openchat/openchat-7b" -k "sk-xxxx"
+```
+
 ## First Run
 
 When you first run `python main.py`:
 
-1. Enter your character when prompted (format: "Name, description")
-2. Enter your name (the player character)
-3. Optionally enter an opening scene
-4. Start roleplaying!
+1. **Choose an option:**
+   - Press **ENTER** to create a new character
+   - Type a **number** to load a saved session
+   - Type a **name** to search for a session
 
-### Character Format Tips
+2. If creating new, enter:
+   - Character name
+   - Character description (personality, appearance, backstory)
+   - Your name (optional)
+   - Opening scene (optional)
 
-The best results come from describing your character with **name, relationship, and personality**:
+3. Start roleplaying!
+
+### Character Description Tips
+
+The best results come from describing your character with **personality and backstory**:
 
 ```
-Kelly, your wife, a celebrity from Hollywood who's protective and jealous
+A wise old wizard who protects the kingdom, stern but caring
 ```
 
 ```
-John, my husband, a 35-year-old businessman who works too much
-```
-
-```
-Merlin, the ancient wizard who mentors me in magic
+A mysterious thief from the streets, quick-witted and sneaky
 ```
 
 **Key tips:**
-- Start with the **character name** (e.g., "Kelly")
-- Add **relationship to you** (e.g., "your wife", "my husband", "my mentor")
-- Include **personality traits** (e.g., "protective", "jealous", "wise")
+- Include **personality traits** (e.g., "wise", "sneaky", "friendly")
+- Add **appearance hints** if desired (e.g., "wears a red cloak")
 - Keep descriptions **2-3 sentences** for best results
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `/help` | Show this help screen |
-| `/memory` | View tracked characters and relationships |
-| `/status` | Show current scene, mood, and settings |
-| `/lore` | Show story lore |
+| `/help` | Show help screen with all commands |
+| `/memory` or `/mem` | View tracked characters and relationships |
+| `/status` | Show current character, player, model, scene, mood |
+| `/lore` | Show story history/lore |
 | `/narrate` | Toggle narration mode (describes scene + actions + dialogue) |
-| `/retry` | Regenerate last response |
+| `/retry` | Regenerate last AI response |
+| `/clear` | Reset conversation history (asks for confirmation) |
+| `/debug` | Toggle debug output |
 | `/set scene <desc>` | Set current scene context |
 | `/set mood <desc>` | Set character's mood |
-| `/set name <name>` | Rename the character mid-session |
-| `/set player <name>` | Rename the player label |
-| `/save [name]` | Save current session |
-| `/load <name>` | Load a saved session |
+| `/set name <name>` | Rename the character |
+| `/set player <name>` | Rename the player |
+| `/save [name]` | Save session (optional custom name) |
+| `/load` or `/new` | Load saved session or create new (interactive) |
 | `/sessions` | List all saved sessions |
-| `/clear` | Reset conversation history (keeps persona) |
-| `/debug` | Toggle debug output |
-| `exit` or `/exit` | Quit the session |
+| `exit` or `/exit` | Quit (asks to save first) |
+
+## Session Management
+
+### Saving Sessions
+- Type `/save` to save with automatic name (e.g., "Hannah_20240315_143022")
+- Type `/save my_adventure` to save with custom name
+
+### Loading Sessions
+- Type `/load` to see saved sessions and choose one
+- Works with:
+  - Session number (e.g., "1", "2")
+  - Session name (partial match, e.g., "hannah")
+- After loading, you can edit the character name/description
 
 ## Configuration
 
-Edit the settings in `main.py`:
+The app now uses CLI arguments. For environment configuration:
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `CONDENSE_THRESHOLD` | 22 | Messages before triggering condensation |
-| `KEEP_RECENT_TURNS` | 10 | Recent turns to keep after condensation |
-| `REPLY_MAX_TOKENS` | 400 | Max tokens per response |
-| `DEBUG` | false | Enable debug output |
+| Environment Variable | Description |
+|---------------------|-------------|
+| `OPENROUTER_API_KEY` | Your OpenRouter API key |
+| `DEBUG` | Set to "true" for debug logs |
 
 ## Troubleshooting
 
-- **Rate limiting**: Some models may be temporarily unavailable
-- **Empty responses**: Try a different model from the list
+- **Rate limiting**: Some models may be temporarily unavailable - the engine will automatically try other models
+- **Empty responses**: Try `/narrate` mode or use `/retry` to regenerate
 - **Debug mode**: Set `DEBUG=true` in `.env` for detailed logs
+- **API key issues**: Use `--key` option to provide a key for a single session
