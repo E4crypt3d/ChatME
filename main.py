@@ -7,7 +7,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         "-m",
-        help="Model to use (e.g., cognitivecomputations/dolphin-mistral-24b-venice-edition:free)",
+        help="Model to use (default: openrouter/free). Examples: openrouter/free, arcee-ai/trinity-large-preview:free, deepseek/deepseek-r1:free",
     )
     parser.add_argument(
         "--key",

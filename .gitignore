@@ -72,6 +72,7 @@ instance/
 # Scrapy stuff:
 .scrapy
 
+chatme_sessions/
 # Sphinx documentation
 docs/_build/
 

@@ -27,6 +27,24 @@ from models import WorldMemory
 
 load_dotenv()
 
+# precompiled for performance
+_NAME_PATTERNS = [
+    re.compile(r"(?:i am|i'm|my name is)\s+([A-Z][a-z]{1,})", re.IGNORECASE),
+    re.compile(r"(?:this is|meet|introduce[d]?)\s+([A-Z][a-z]{1,})", re.IGNORECASE),
+    re.compile(r"(?:call(?:ed)?|named?)\s+([A-Z][a-z]{1,})", re.IGNORECASE),
+]
+_AGE_PATTERN = re.compile(r"\b([A-Z][a-z]{1,})\s+is\s+(\d{1,3})\s*(?:years?\s*old)?")
+_REL_PATTERN = re.compile(r"\b([A-Z][a-z]{1,})\s+is\s+(?:my|his|her|their|our)\s+(\w+)")
+_REL_PATTERN2 = re.compile(r"(?:my|his|her|their|our)\s+(\w+)\s+([A-Z][a-z]{1,})")
+_GROUP_REL_PATTERN = re.compile(
+    r"\b([A-Z][a-z]{1,})\s+and\s+([A-Z][a-z]{1,})\s+are\s+(\w+)"
+)
+_DIRECTIVE_PATTERN = re.compile(r"\*([^*]+)\*")
+_ACTION_STRIP = re.compile(r"\*[^*]+\*")
+_LOCATION_PREPS = frozenset(
+    ("in", "at", "near", "inside", "outside", "through", "across", "into")
+)
+
 
 class RoleplayEngine:
     CONDENSE_THRESHOLD_MSGS = 30
@@ -43,17 +61,27 @@ class RoleplayEngine:
     SESSIONS_DIR = Path("chatme_sessions")
 
     def __init__(self, model: Optional[str] = None, api_key: Optional[str] = None):
+        self._original_stdout = None
         if sys.platform == "win32":
             import io
 
+            self._original_stdout = sys.stdout
             sys.stdout = io.TextIOWrapper(
                 sys.stdout.buffer, encoding="utf-8", errors="replace"
             )
         self.console = Console(force_terminal=True)
-        self._override_model = model
+        self._override_model = model or os.environ.get("MODEL") or "openrouter/free"
         self._override_api_key = api_key
-        self._init_client()
-        self._init_state()
+        try:
+            self._init_client()
+            self._init_state()
+        except Exception:
+            self._cleanup()
+            raise
+
+    def _cleanup(self) -> None:
+        if sys.platform == "win32" and self._original_stdout is not None:
+            sys.stdout = self._original_stdout
 
     def _init_client(self) -> None:
         api_key = self._override_api_key or os.environ.get("OPENROUTER_API_KEY")
@@ -65,25 +93,8 @@ class RoleplayEngine:
             api_key=api_key,
             timeout=self.REQUEST_TIMEOUT,
         )
-        if self._override_model:
-            self.models: list[str] = [self._override_model]
-            self.summary_models: list[str] = [self._override_model]
-        else:
-            self.models = [
-                "arcee-ai/trinity-large-preview:free",
-                "stepfun/step-3.5-flash:free",
-                "z-ai/glm-4.5-air:free",
-                "arcee-ai/trinity-mini:free",
-                "nvidia/nemotron-3-super-120b-a12b:free",
-                "nvidia/nemotron-3-nano-30b-a3b:free",
-                "liquid/lfm-2.5-1.2b-instruct:free",
-                "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
-            ]
-            self.summary_models = [
-                "arcee-ai/trinity-mini:free",
-                "z-ai/glm-4.5-air:free",
-                "stepfun/step-3.5-flash:free",
-            ]
+        self.models: list[str] = [self._override_model]
+        self.summary_models: list[str] = [self._override_model]
         self._last_working_model: Optional[str] = None
         self._failed_models: set[str] = set()
 
@@ -101,7 +112,6 @@ class RoleplayEngine:
         self.mood: str = ""
         self._last_assistant_content: str = ""
         self._recent_assistant_excerpts: list[str] = []
-        self.narrate_mode: bool = False
 
     def _apply_session_data(self, data: dict) -> None:
         self.persona_name = data.get("persona_name", "Character")
@@ -113,30 +123,18 @@ class RoleplayEngine:
         self._condense_count = data.get("condense_count", 0)
         self.scene = data.get("scene", "")
         self.mood = data.get("mood", "")
-        self.narrate_mode = data.get("narrate_mode", False)
         self._recent_assistant_excerpts = data.get("recent_excerpts", [])
 
     def _parse_directives(self, user_input: str) -> tuple[str, str]:
-        directive_pattern = re.compile(r"\*([^*]+)\*")
-        directives = directive_pattern.findall(user_input)
-        cleaned_speech = directive_pattern.sub("", user_input).strip()
+        directives = _DIRECTIVE_PATTERN.findall(user_input)
+        cleaned_speech = _DIRECTIVE_PATTERN.sub("", user_input).strip()
         return cleaned_speech, " ".join(directives)
 
     def _build_few_shot(self) -> str:
-        # one example so small models immediately get the format
-        name = self.persona_name
-        player = self.player_label
-        if self.narrate_mode:
-            return (
-                f"\nEXAMPLE (follow this format exactly):\n"
-                f"{player}: Hey, you okay?\n"
-                f'{name}: *{name} glances up slowly, eyes tired.* "Yeah... just thinking." '
-                f"*{name} shifts to make room on the bench.*\n"
-            )
         return (
             f"\nEXAMPLE (follow this format exactly):\n"
-            f"{player}: Hey, you okay?\n"
-            f'{name}: *glances up* "Yeah, just thinking." *shifts slightly*\n'
+            f"{self.player_label}: Hey, you okay?\n"
+            f'{self.persona_name}: *glances up* "Yeah, just thinking." *shifts slightly*\n'
         )
 
     def _build_no_repeat_block(self) -> str:
@@ -149,31 +147,14 @@ class RoleplayEngine:
         world_info = self.memory.format_world()
         scene_block = f"\nSCENE: {self.scene}" if self.scene else ""
         mood_block = f"\nMOOD: {self.mood}" if self.mood else ""
-
-        if self.narrate_mode:
-            style_rule = (
-                "Write as narrator+character: describe actions, surroundings, AND dialogue together. "
-                "3-5 sentences. Use *italics* for actions."
-            )
-        else:
-            style_rule = (
-                "Reply as the character only. 2-3 sentences max. "
-                "Use *italics* for actions/thoughts, dialogue in quotes."
-            )
-
-        no_repeat = self._build_no_repeat_block()
-        few_shot = self._build_few_shot()
-
-        lore_block = ""
-        if lore and lore != "The story is just beginning.":
-            lore_block = f"\nBACKSTORY (already happened, do not re-enact):\n{lore}\n"
-
+        lore_block = (
+            f"\nBACKSTORY (already happened, do not re-enact):\n{lore}\n"
+            if lore and lore != "The story is just beginning."
+            else ""
+        )
         world_block = (
             f"\nKNOWN CHARACTERS:\n{world_info}\n" if world_info.strip() else ""
         )
-
-        # character identity first, rules second, examples third, context last
-        # small models weight the top and bottom — keep identity+rules at top, lore at bottom
         return (
             f"You are {persona_desc}\n"
             f"Your name: {self.persona_name}\n"
@@ -187,10 +168,10 @@ class RoleplayEngine:
             f"- When player writes *action*, you must perform that action.\n"
             f"- Example: 'hey *Karen smiles*' means you should smile\n"
             f"- Example: '*Karen thinks he's handsome*' means you have that thought\n"
-            f"- {style_rule}\n"
+            f"- Reply as the character only. 2-3 sentences max. Use *italics* for actions/thoughts, dialogue in quotes.\n"
             f"- Always respond to the very last message.\n"
-            f"{no_repeat}"
-            f"{few_shot}"
+            f"{self._build_no_repeat_block()}"
+            f"{self._build_few_shot()}"
             f"{lore_block}"
             f"{world_block}"
         )
@@ -221,35 +202,27 @@ class RoleplayEngine:
         self._patch_system_marker(CHARACTERS_MARKER, self.memory.format_world())
 
     def _track_excerpt(self, content: str) -> None:
-        # rolling list of recent openings fed into the no-repeat block
         first = content.strip().split("\n")[0][:80]
         if first:
             self._recent_assistant_excerpts.append(first)
-            self._recent_assistant_excerpts = self._recent_assistant_excerpts[-6:]
+            if len(self._recent_assistant_excerpts) > 6:
+                self._recent_assistant_excerpts = self._recent_assistant_excerpts[-6:]
         self._rebuild_system()
 
     def _extract_info_from_message(self, text: str, is_user: bool) -> None:
-        for pat in [
-            r"(?:i am|i'm|my name is)\s+([A-Z][a-z]{1,})",
-            r"(?:this is|meet|introduce[d]?)\s+([A-Z][a-z]{1,})",
-            r"(?:call(?:ed)?|named?)\s+([A-Z][a-z]{1,})",
-        ]:
-            for m in re.finditer(pat, text):
+        for pat in _NAME_PATTERNS:
+            for m in pat.finditer(text):
                 if is_valid_name(m.group(1)):
                     self.memory.add_character(m.group(1), context=text[:80])
 
-        for m in re.finditer(
-            r"\b([A-Z][a-z]{1,})\s+is\s+(\d{1,3})\s*(?:years?\s*old)?", text
-        ):
+        for m in _AGE_PATTERN.finditer(text):
             name, age = m.group(1), m.group(2)
             if is_valid_name(name):
                 c = self.memory.add_character(name, age=age, context=text[:80])
                 if c and not c.age:
                     c.age = age
 
-        for m in re.finditer(
-            r"\b([A-Z][a-z]{1,})\s+is\s+(?:my|his|her|their|our)\s+(\w+)", text
-        ):
+        for m in _REL_PATTERN.finditer(text):
             name, rel = m.group(1), m.group(2).lower()
             if is_valid_name(name) and rel in RELATION_WORDS:
                 self.memory.add_character(name, context=text[:80])
@@ -257,9 +230,7 @@ class RoleplayEngine:
                     self.persona_name, name, rel, context=text[:80]
                 )
 
-        for m in re.finditer(
-            r"(?:my|his|her|their|our)\s+(\w+)\s+([A-Z][a-z]{1,})", text
-        ):
+        for m in _REL_PATTERN2.finditer(text):
             rel, name = m.group(1).lower(), m.group(2)
             if rel in RELATION_WORDS and is_valid_name(name):
                 self.memory.add_character(name, context=text[:80])
@@ -267,9 +238,7 @@ class RoleplayEngine:
                     self.persona_name, name, rel, context=text[:80]
                 )
 
-        for m in re.finditer(
-            r"\b([A-Z][a-z]{1,})\s+and\s+([A-Z][a-z]{1,})\s+are\s+(\w+)", text
-        ):
+        for m in _GROUP_REL_PATTERN.finditer(text):
             n1, n2, rt = m.group(1), m.group(2), m.group(3).lower()
             if is_valid_name(n1) and is_valid_name(n2):
                 self.memory.add_character(n1, context=text[:80])
@@ -279,16 +248,7 @@ class RoleplayEngine:
         known_names = {c.lower() for c in self.memory.characters}
         words = text.split()
         for i, word in enumerate(words):
-            if word.lower() in {
-                "in",
-                "at",
-                "near",
-                "inside",
-                "outside",
-                "through",
-                "across",
-                "into",
-            } and i + 1 < len(words):
+            if word.lower() in _LOCATION_PREPS and i + 1 < len(words):
                 cand = words[i + 1].strip(".,!?;:\"'")
                 if (
                     len(cand) > 2
@@ -421,6 +381,7 @@ class RoleplayEngine:
             return ""
         content = self._consume_stream(resp)
         if len(content.strip()) < self.MIN_RESPONSE_LEN:
+            # retry once on short/empty response
             if used_model:
                 self._failed_models.add(used_model)
             resp2, _ = self.call_with_failover(self.history, stream=True)
@@ -439,17 +400,15 @@ class RoleplayEngine:
         n = self._convo_msg_count()
         keep_n = self.KEEP_RECENT_PAIRS * 2
         threshold = (
-            (keep_n + self.CONDENSE_THRESHOLD_MSGS)
+            keep_n + self.CONDENSE_THRESHOLD_MSGS
             if self._condense_count > 0
             else self.CONDENSE_THRESHOLD_MSGS
         )
-        if len(self.history) > self.MAX_HISTORY_HARD_CAP:
-            return True
-        if n >= threshold:
-            return True
-        if self._estimate_tokens(self.history) > self.CONDENSE_THRESHOLD_TOKENS:
-            return True
-        return False
+        return (
+            len(self.history) > self.MAX_HISTORY_HARD_CAP
+            or n >= threshold
+            or self._estimate_tokens(self.history) > self.CONDENSE_THRESHOLD_TOKENS
+        )
 
     def _summarise(self, messages: list[dict]) -> Optional[str]:
         if not messages:
@@ -459,10 +418,10 @@ class RoleplayEngine:
             if not isinstance(m, dict):
                 continue
             role = m.get("role")
-            if not role:
+            if not role or role == "system":
                 continue
             role_str = "Assistant" if role == "assistant" else "User"
-            cleaned = re.sub(r"\*[^*]+\*", "", m.get("content", "")).strip()
+            cleaned = _ACTION_STRIP.sub("", m.get("content", "")).strip()
             if cleaned:
                 lines.append(f"[{role_str}]: {cleaned}")
         if not lines:
@@ -482,10 +441,7 @@ class RoleplayEngine:
                     "Actions in asterisks are temporary — do NOT include them in summary."
                 ),
             },
-            {
-                "role": "user",
-                "content": f"Characters: {known_chars}\n\n{transcript}",
-            },
+            {"role": "user", "content": f"Characters: {known_chars}\n\n{transcript}"},
         ]
         resp, model_used = self.call_with_failover(
             prompt, stream=False, is_summary=True
@@ -520,7 +476,7 @@ class RoleplayEngine:
         for msg in [m["content"] for m in messages if m.get("role") == "assistant"][
             -2:
         ]:
-            clean = re.sub(r"\*[^*]+\*", "", msg).strip()[:100]
+            clean = _ACTION_STRIP.sub("", msg).strip()[:100]
             if clean:
                 bullets.append(f"• Recent: {clean}")
         return "\n".join(bullets) if bullets else "• Story continued."
@@ -591,9 +547,11 @@ class RoleplayEngine:
         elif key == "name":
             old = self.persona_name
             self.persona_name = value.capitalize()
+            self._rebuild_system()
             self.console.print(f"[green]✓ renamed:[/green] {old} → {self.persona_name}")
         elif key == "player":
             self.player_label = value.capitalize()
+            self._rebuild_system()
             self.console.print(f"[green]✓ player:[/green] {self.player_label}")
         else:
             self.console.print(f"[yellow]unknown: {key}[/yellow]")
@@ -605,30 +563,42 @@ class RoleplayEngine:
 
     def save_session(self, name: Optional[str] = None) -> None:
         if not name:
-            name = f"{self.persona_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            exact_match = self.SESSIONS_DIR / f"{self.persona_name}.json"
+            if exact_match.exists():
+                name = self.persona_name
+            else:
+                existing_sessions = list(
+                    self.SESSIONS_DIR.glob(f"{self.persona_name}*.json")
+                )
+                if existing_sessions:
+                    name = existing_sessions[0].stem
+                else:
+                    name = f"{self.persona_name}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
         path = self._get_session_path(name)
-        path.write_text(
-            json.dumps(
-                {
-                    "persona_name": self.persona_name,
-                    "persona_desc": self.persona_desc,
-                    "player_label": self.player_label,
-                    "lore": self.lore,
-                    "history": self.history,
-                    "memory": self.memory.to_dict(),
-                    "condense_count": self._condense_count,
-                    "scene": self.scene,
-                    "mood": self.mood,
-                    "narrate_mode": self.narrate_mode,
-                    "recent_excerpts": self._recent_assistant_excerpts,
-                    "saved_at": datetime.datetime.now().isoformat(),
-                },
-                indent=2,
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        self.console.print(f"[bold green]✓ saved:[/bold green] {path}")
+        try:
+            path.write_text(
+                json.dumps(
+                    {
+                        "persona_name": self.persona_name,
+                        "persona_desc": self.persona_desc,
+                        "player_label": self.player_label,
+                        "lore": self.lore,
+                        "history": self.history,
+                        "memory": self.memory.to_dict(),
+                        "condense_count": self._condense_count,
+                        "scene": self.scene,
+                        "mood": self.mood,
+                        "recent_excerpts": self._recent_assistant_excerpts,
+                        "saved_at": datetime.datetime.now().isoformat(),
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            self.console.print(f"[bold green]✓ saved:[/bold green] {path}")
+        except OSError as e:
+            self.console.print(f"[bold red]save failed:[/bold red] {e}")
 
     def load_session(self, name: str) -> bool:
         path = self._get_session_path(name)
@@ -642,7 +612,7 @@ class RoleplayEngine:
             self._apply_session_data(json.loads(path.read_text(encoding="utf-8")))
             self.console.print(f"[bold green]✓ loaded:[/bold green] {path}")
             return True
-        except Exception as e:
+        except (json.JSONDecodeError, KeyError, OSError) as e:
             self.console.print(f"[bold red]load failed:[/bold red] {e}")
             return False
 
@@ -693,13 +663,11 @@ class RoleplayEngine:
     def _load_session_by_path(self, path: Path) -> bool:
         try:
             self._apply_session_data(json.loads(path.read_text(encoding="utf-8")))
-            self.console.print(
-                f"\n[bold green]✓ loaded:[/bold green] {self.persona_name}"
-            )
+            self.console.print("\n[bold green]✓ loaded session[/bold green]")
             if self.scene:
                 self.console.print(f"   scene: {self.scene}")
             return True
-        except Exception as e:
+        except (json.JSONDecodeError, KeyError, OSError) as e:
             self.console.print(f"[bold red]load failed:[/bold red] {e}")
             return False
 
@@ -733,7 +701,6 @@ class RoleplayEngine:
             f"[bold]Model:[/bold]      {self._last_working_model or '(trying...)'}",
             f"[bold]Scene:[/bold]      {self.scene or '(none)'}",
             f"[bold]Mood:[/bold]       {self.mood or '(none)'}",
-            f"[bold]Narration:[/bold]  {'on' if self.narrate_mode else 'off'}",
             f"[bold]Messages:[/bold]   {self._convo_msg_count()}",
             f"[bold]Condenses:[/bold]  {self._condense_count}",
         ]
@@ -748,8 +715,7 @@ class RoleplayEngine:
                 "  /help  /status  /memory  /lore\n\n"
                 "[bold green]CHARACTER[/bold green]\n"
                 "  /set name <n>    /set player <n>\n"
-                "  /set scene <desc>    /set mood <desc>\n"
-                "  /narrate\n\n"
+                "  /set scene <desc>    /set mood <desc>\n\n"
                 "[bold green]CONVERSATION[/bold green]\n"
                 "  /retry  /clear\n\n"
                 "[bold green]SESSIONS[/bold green]\n"
@@ -761,98 +727,113 @@ class RoleplayEngine:
             )
         )
 
+    def _strip_name_prefix(self, content: str) -> str:
+        stripped = content.strip()
+        prefix = self.persona_name.lower() + ":"
+        if stripped.lower().startswith(prefix):
+            return stripped[len(prefix) :].strip()
+        return stripped
+
     def _startup_flow(self) -> bool:
-        # session picker or new character, returns false to quit
-        sessions = self._list_sessions()
+        try:
+            sessions = self._list_sessions()
+            if not sessions:
+                self.console.print(
+                    "\n[bold]no sessions — creating new character[/bold]\n"
+                )
+            else:
+                self.console.print("\n[bold]saved sessions:[/bold]")
+                self._show_sessions_table()
+                self.console.print("\n  ENTER = new  |  number or name = load")
+                choice = Prompt.ask("\n[bold green]>[/bold green]", default="").strip()
 
-        if not sessions:
-            self.console.print("\n[bold]no sessions — creating new character[/bold]\n")
-        else:
-            self.console.print("\n[bold]saved sessions:[/bold]")
-            self._show_sessions_table()
-            self.console.print("\n  ENTER = new  |  number or name = load")
-            choice = Prompt.ask("\n[bold green]>[/bold green]", default="").strip()
-
-            if choice:
-                selected = None
-                if choice.isdigit():
-                    idx = int(choice) - 1
-                    if 0 <= idx < len(sessions):
-                        selected = sessions[idx]
-                else:
-                    for s in sessions:
-                        if choice.lower() in s["name"].lower():
-                            selected = s
-                            break
-
-                if not selected:
-                    self.console.print(f"[yellow]not found: {choice}[/yellow]")
+                # Handle exit/quit commands at session prompt
+                if choice.lower() in ("exit", "quit", "q", "e"):
+                    self.console.print("[bold green]goodbye[/bold green]")
                     return False
 
-                if self._load_session_by_path(selected["path"]):
-                    if (
-                        Prompt.ask(
-                            "[bold yellow]edit character?[/bold yellow] [dim](y/N)[/dim]",
-                            default="n",
-                        ).lower()
-                        == "y"
-                    ):
-                        self._edit_character_prompts()
-                    return True
-                return False
+                if choice:
+                    selected = None
+                    if choice.isdigit():
+                        idx = int(choice) - 1
+                        if 0 <= idx < len(sessions):
+                            selected = sessions[idx]
+                    else:
+                        for s in sessions:
+                            if choice.lower() in s["name"].lower():
+                                selected = s
+                                break
 
-        while True:
-            persona_name_input = Prompt.ask(
-                "[bold green]character name?[/bold green]"
-            ).strip()
-            if not persona_name_input:
-                self.console.print("[yellow]name required[/yellow]")
-                continue
+                    if not selected:
+                        self.console.print(f"[yellow]not found: {choice}[/yellow]")
+                        return False
 
-            self.persona_name = persona_name_input.capitalize()
+                    if self._load_session_by_path(selected["path"]):
+                        if (
+                            Prompt.ask(
+                                "[bold yellow]edit character?[/bold yellow] [dim](y/N)[/dim]",
+                                default="n",
+                            ).lower()
+                            == "y"
+                        ):
+                            self._edit_character_prompts()
+                        return True
+                    return False
 
-            raw = Prompt.ask(
-                "[bold green]description?[/bold green] [dim](personality, appearance, backstory)[/dim]"
-            ).strip()
-            if not raw:
-                self.console.print("[yellow]description required[/yellow]")
-                continue
+            while True:
+                persona_name_input = Prompt.ask(
+                    "[bold green]character name?[/bold green]"
+                ).strip()
+                if not persona_name_input:
+                    self.console.print("[yellow]name required[/yellow]")
+                    continue
+                self.persona_name = persona_name_input.capitalize()
 
-            self.persona_desc = raw
+                raw = Prompt.ask(
+                    "[bold green]description?[/bold green] [dim](personality, appearance, backstory)[/dim]"
+                ).strip()
+                if not raw:
+                    self.console.print("[yellow]description required[/yellow]")
+                    continue
+                self.persona_desc = raw
 
-            player_raw = Prompt.ask(
-                "[bold green]your name?[/bold green] [dim](enter to skip)[/dim]",
-                default="",
-            ).strip()
-            if player_raw:
-                self.player_label = player_raw.capitalize()
+                player_raw = Prompt.ask(
+                    "[bold green]your name?[/bold green] [dim](enter to skip)[/dim]",
+                    default="",
+                ).strip()
+                if player_raw:
+                    self.player_label = player_raw.capitalize()
 
-            scene_raw = Prompt.ask(
-                "[bold green]opening scene?[/bold green] [dim](enter to skip)[/dim]",
-                default="",
-            ).strip()
-            if scene_raw:
-                self.scene = scene_raw
-                self.lore = f"The story begins: {scene_raw}"
+                scene_raw = Prompt.ask(
+                    "[bold green]opening scene?[/bold green] [dim](enter to skip)[/dim]",
+                    default="",
+                ).strip()
+                if scene_raw:
+                    self.scene = scene_raw
+                    self.lore = f"The story begins: {scene_raw}"
 
-            self.memory.add_character(
-                self.persona_name,
-                description=self.persona_desc,
-                context="player character",
-            )
-            self.history.append(
-                {
-                    "role": "system",
-                    "content": self._build_system_content(self.persona_desc, self.lore),
-                }
-            )
-            return True
+                self.memory.add_character(
+                    self.persona_name,
+                    description=self.persona_desc,
+                    context="player character",
+                )
+                self.history.append(
+                    {
+                        "role": "system",
+                        "content": self._build_system_content(
+                            self.persona_desc, self.lore
+                        ),
+                    }
+                )
+                return True
+        except (KeyboardInterrupt, EOFError):
+            self.console.print("\n[bold green]goodbye[/bold green]")
+            return False
 
     def _chat_loop(self) -> None:
-        mode_tag = " [dim]📖 narration on[/dim]" if self.narrate_mode else ""
         self.console.print(
             f"\n[bold green]✓ ready[/bold green]  "
-            f"[magenta]{self.persona_name}[/magenta]{mode_tag}  "
+            f"[magenta]{self.persona_name}[/magenta]  "
             f"[dim]player: {self.player_label}  scene: {self.scene or 'none'}[/dim]\n"
             f"[dim]/help for commands  •  exit to quit[/dim]\n"
         )
@@ -873,7 +854,7 @@ class RoleplayEngine:
 
             cmd = user_input.lower().strip()
 
-            if cmd in ("exit", "/exit", "quit", "/quit"):
+            if cmd in ("exit", "/exit", "quit", "/quit", "q", "/q", "e", "/e"):
                 if (
                     Prompt.ask(
                         "[yellow]save before exit?[/yellow] [dim](y/N)[/dim]",
@@ -897,13 +878,6 @@ class RoleplayEngine:
             if cmd == "/lore":
                 self.console.print(Panel(self.lore, title="lore", border_style="green"))
                 continue
-            if cmd == "/narrate":
-                self.narrate_mode = not self.narrate_mode
-                self._rebuild_system()
-                self.console.print(
-                    f"[dim green]narration {'on' if self.narrate_mode else 'off'}[/dim green]"
-                )
-                continue
             if cmd == "/retry":
                 if self.history and self.history[-1]["role"] == "assistant":
                     self.history.pop()
@@ -912,14 +886,8 @@ class RoleplayEngine:
                     self.console.print(
                         f"[bold magenta]{self.persona_name}[/bold magenta]"
                     )
-                    content = self._get_reply()
-                    # strip character name if model prefixed it
-                    if content and content.strip().lower().startswith(
-                        self.persona_name.lower() + "):"
-                    ):
-                        content = content[len(self.persona_name) + 1 :].strip()
-
-                    if content and len(content.strip()) >= 5:
+                    content = self._strip_name_prefix(self._get_reply())
+                    if content and len(content) >= 5:
                         self._last_assistant_content = content
                         self._track_excerpt(content)
                         self.history.append(
@@ -968,27 +936,20 @@ class RoleplayEngine:
 
             self._extract_info_from_message(user_input, is_user=True)
             clean_speech, directives = self._parse_directives(user_input)
-            if directives:
-                labeled_input = (
-                    f"{self.player_label}: {clean_speech}\n"
-                    f"[ACTION FOR {self.persona_name.upper()}]: {directives}"
-                )
-            else:
-                labeled_input = f"{self.player_label}: {user_input}"
+            labeled_input = (
+                f"{self.player_label}: {clean_speech}\n[ACTION FOR {self.persona_name.upper()}]: {directives}"
+                if directives
+                else f"{self.player_label}: {user_input}"
+            )
 
             self.history.append({"role": "user", "content": labeled_input})
             self._check_and_condense()
             self.console.print(Rule(style="dim"))
             self.console.print(f"[bold magenta]{self.persona_name}[/bold magenta]")
 
-            content = self._get_reply()
-            # strip character name if model prefixed it
-            if content and content.strip().lower().startswith(
-                self.persona_name.lower() + ":"
-            ):
-                content = content[len(self.persona_name) + 1 :].strip()
+            content = self._strip_name_prefix(self._get_reply())
 
-            if not content or len(content.strip()) < 5:
+            if not content or len(content) < 5:
                 self.console.print("[dim red]empty response — try again[/dim red]")
                 self.history.pop()
                 continue
@@ -1023,9 +984,21 @@ class RoleplayEngine:
 
 if __name__ == "__main__":
     import argparse
+    import traceback
+
+    def handle_exception(exc_type, exc_value, exc_traceback):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+        traceback.print_exception(exc_type, exc_value, exc_traceback)
+
+    sys.excepthook = handle_exception
 
     parser = argparse.ArgumentParser(description="ChatME Roleplay Engine")
     parser.add_argument("--model", "-m", help="model override")
     parser.add_argument("--key", "-k", help="api key override")
     args = parser.parse_args()
-    RoleplayEngine(model=args.model, api_key=args.key).run()
+    try:
+        RoleplayEngine(model=args.model, api_key=args.key).run()
+    except (KeyboardInterrupt, EOFError):
+        print("\ngoodbye")
