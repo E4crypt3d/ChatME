@@ -4,13 +4,13 @@ A terminal-based roleplay engine using free OpenRouter models with automatic mem
 
 ## Features
 
-- **Multi-model failover** - Automatically switches to backup models if one fails
+- **Free Models Router** - Uses OpenRouter's free models router (`openrouter/free`) by default for automatic model selection
 - **Memory consolidation** - Summarizes conversation history to stay within context limits
 - **Character memory** - Tracks characters and relationships mentioned in conversation
 - **Rich terminal UI** - Beautiful colored output with Rich library
 - **Character persistence** - Remembers story context across sessions
 - **Interactive session management** - Easy load/save with visual selection menu
-- **CLI options** - Specify model and API key from command line
+- **CLI options** - Specify model and API key from command line or environment variables
 - **Inline character control** - Direct the AI character's actions using *asterisks*
 
 ## Setup
@@ -45,14 +45,17 @@ python main.py --model <model_name> --key <api_key>
 
 Examples:
 ```bash
+# Use default free models router
+python main.py
+
 # Use a specific model
-python main.py -m cognitivecomputations/dolphin-mistral-24b-venice-edition:free
+python main.py -m deepseek/deepseek-r1:free
 
 # Use a custom API key
 python main.py --key sk-xxxxxxx
 
 # Both options together
-python main.py -m "openchat/openchat-7b" -k "sk-xxxx"
+python main.py -m "deepseek/deepseek-r1:free" -k "sk-xxxx"
 ```
 
 ## First Run
@@ -63,6 +66,7 @@ When you first run `python main.py`:
    - Press **ENTER** to create a new character
    - Type a **number** to load a saved session
    - Type a **name** to search for a session
+   - Type **exit** or **quit** to exit
 
 2. If creating new, enter:
    - Character name (the AI-controlled character)
@@ -125,7 +129,6 @@ The text inside asterisks is extracted and sent as a clear directive to the AI, 
 | `/memory` or `/mem`  | View tracked characters and relationships                    |
 | `/status`            | Show current character, player, model, scene, mood           |
 | `/lore`              | Show story history/lore                                      |
-| `/narrate`           | Toggle narration mode (describes scene + actions + dialogue) |
 | `/retry`             | Regenerate last AI response                                  |
 | `/clear`             | Reset conversation history (asks for confirmation)           |
 | `/debug`             | Toggle debug output                                          |
@@ -133,16 +136,16 @@ The text inside asterisks is extracted and sent as a clear directive to the AI, 
 | `/set mood <desc>`   | Set character's mood                                         |
 | `/set name <name>`   | Rename the character                                         |
 | `/set player <name>` | Rename the player                                            |
-| `/save [name]`       | Save session (optional custom name)                          |
+| `/save [name]`       | Save session (overwrites previous save for same character)   |
 | `/load` or `/new`    | Load saved session or create new (interactive)               |
 | `/sessions`          | List all saved sessions                                      |
-| `exit` or `/exit`    | Quit (asks to save first)                                    |
+| `exit`, `/exit`, `q` | Quit (asks to save first)                                    |
 
 ## Session Management
 
 ### Saving Sessions
-- Type `/save` to save with automatic name (e.g., "Hannah_20240315_143022")
-- Type `/save my_adventure` to save with custom name
+- Type `/save` to save - automatically overwrites previous save for the same character
+- Type `/save my_adventure` to save with custom name (creates new file)
 
 ### Loading Sessions
 - Type `/load` to see saved sessions and choose one
@@ -153,17 +156,28 @@ The text inside asterisks is extracted and sent as a clear directive to the AI, 
 
 ## Configuration
 
-The app now uses CLI arguments. For environment configuration:
+Configure via environment variables or CLI arguments:
 
 | Environment Variable | Description                  |
 | -------------------- | ---------------------------- |
 | `OPENROUTER_API_KEY` | Your OpenRouter API key      |
-| `DEBUG`              | Set to "true" for debug logs |
+| `MODEL`             | Default model (default: `openrouter/free`) |
+| `DEBUG`             | Set to "true" for debug logs |
+
+Examples:
+```bash
+# Set default model via environment
+export MODEL=deepseek/deepseek-r1:free
+python main.py
+
+# Or in .env file
+MODEL=arcee-ai/trinity-large-preview:free
+```
 
 ## Troubleshooting
 
-- **Rate limiting**: Some models may be temporarily unavailable - the engine will automatically try other models
-- **Empty responses**: Try `/narrate` mode or use `/retry` to regenerate
+- **Rate limiting**: Some models may be temporarily unavailable - the engine will automatically try other models when using `openrouter/free`
+- **Empty responses**: Use `/retry` to regenerate
 - **Debug mode**: Set `DEBUG=true` in `.env` for detailed logs
 - **API key issues**: Use `--key` option to provide a key for a single session
 - **Character confusion**: Use the inline control feature (`*character does X*`) to explicitly direct the AI character's actions
