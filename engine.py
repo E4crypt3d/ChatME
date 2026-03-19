@@ -182,6 +182,8 @@ class RoleplayEngine:
             f"- Stay in character. Never say you are an AI.\n"
             f"- Only write your own character's words and actions.\n"
             f"- Never write what {self.player_label} does or says.\n"
+            f"- Do NOT prefix your response with the character name.\n"
+            f"- Never respond to your own actions — only respond to the player.\n"
             f"- When player writes *action*, you must perform that action.\n"
             f"- Example: 'hey *Karen smiles*' means you should smile\n"
             f"- Example: '*Karen thinks he's handsome*' means you have that thought\n"
@@ -476,7 +478,8 @@ class RoleplayEngine:
                 "content": (
                     "Write 3-5 bullet points summarising what happened. "
                     "Past tense only. Events and decisions only. "
-                    "No dialogue quotes. No current scene description. No preamble."
+                    "No dialogue quotes. No current scene description. No preamble. "
+                    "Actions in asterisks are temporary — do NOT include them in summary."
                 ),
             },
             {
@@ -910,6 +913,12 @@ class RoleplayEngine:
                         f"[bold magenta]{self.persona_name}[/bold magenta]"
                     )
                     content = self._get_reply()
+                    # strip character name if model prefixed it
+                    if content and content.strip().lower().startswith(
+                        self.persona_name.lower() + "):"
+                    ):
+                        content = content[len(self.persona_name) + 1 :].strip()
+
                     if content and len(content.strip()) >= 5:
                         self._last_assistant_content = content
                         self._track_excerpt(content)
@@ -973,6 +982,12 @@ class RoleplayEngine:
             self.console.print(f"[bold magenta]{self.persona_name}[/bold magenta]")
 
             content = self._get_reply()
+            # strip character name if model prefixed it
+            if content and content.strip().lower().startswith(
+                self.persona_name.lower() + ":"
+            ):
+                content = content[len(self.persona_name) + 1 :].strip()
+
             if not content or len(content.strip()) < 5:
                 self.console.print("[dim red]empty response — try again[/dim red]")
                 self.history.pop()
