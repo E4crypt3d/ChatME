@@ -1,7 +1,10 @@
+from __future__ import annotations
+
+# marker tokens
 LORE_MARKER = "<<<LORE_BLOCK>>>"
 CHARACTERS_MARKER = "<<<CHARACTERS>>>"
 
-# common words to ignore
+# name stopwords
 NAME_STOPWORDS: frozenset[str] = frozenset(
     {
         "a",
@@ -102,12 +105,38 @@ NAME_STOPWORDS: frozenset[str] = frozenset(
         "hmm",
         "uh",
         "um",
+        "never",
+        "always",
+        "every",
+        "about",
+        "after",
+        "before",
+        "while",
+        "again",
+        "away",
+        "down",
+        "off",
+        "over",
+        "under",
+        "into",
+        "onto",
+        "much",
+        "more",
+        "most",
+        "less",
+        "least",
+        "each",
+        "both",
+        "all",
+        "any",
+        "few",
     }
 )
 
-# relationship role words
+# relationship words
 RELATION_WORDS: frozenset[str] = frozenset(
     {
+        # personal
         "friend",
         "companion",
         "ally",
@@ -115,6 +144,7 @@ RELATION_WORDS: frozenset[str] = frozenset(
         "enemy",
         "brother",
         "sister",
+        "sibling",
         "mother",
         "father",
         "son",
@@ -133,18 +163,32 @@ RELATION_WORDS: frozenset[str] = frozenset(
         "cousin",
         "uncle",
         "aunt",
+        "nephew",
+        "niece",
         "grandma",
         "grandpa",
+        "grandmother",
+        "grandfather",
+        "grandchild",
+        # professional
         "mentor",
         "student",
         "teacher",
         "apprentice",
         "boss",
         "colleague",
+        "coworker",
+        "employee",
+        "employer",
         "servant",
         "master",
+        # social
         "neighbour",
         "neighbor",
+        "acquaintance",
+        "contact",
+        "associate",
+        # fantasy / title
         "king",
         "queen",
         "lord",
@@ -153,12 +197,26 @@ RELATION_WORDS: frozenset[str] = frozenset(
         "guard",
         "captain",
         "general",
+        "soldier",
+        "spy",
+        "assassin",
+        "mage",
+        "wizard",
+        "witch",
+        "hero",
+        "villain",
+        "chief",
+        "elder",
+        "oracle",
+        "prince",
+        "princess",
     }
 )
 
-# words that look like names but aren't
+# false name words
 FALSE_NAME_WORDS: frozenset[str] = frozenset(
     {
+        # days / months
         "monday",
         "tuesday",
         "wednesday",
@@ -177,37 +235,98 @@ FALSE_NAME_WORDS: frozenset[str] = frozenset(
         "october",
         "november",
         "december",
+        # directions
         "north",
         "south",
         "east",
         "west",
+        "northeast",
+        "northwest",
+        "southeast",
+        "southwest",
+        # programming / misc tokens
         "true",
         "false",
         "none",
         "null",
-        "hollywood",
+        "undefined",
+        "error",
+        "warning",
+        # common single-word exclamations/fillers that start caps
         "okay",
         "sorry",
         "thanks",
         "please",
         "indie",
+        "hello",
+        "welcome",
+        "good",
+        "right",
+        "wrong",
+        "wait",
+        "stop",
+        "help",
+        "run",
+        "go",
+        "stay",
+        "yes",
+        "no",
+        "well",
+        "maybe",
+        "perhaps",
+        "indeed",
+        "exactly",
+        "certainly",
+        # genre proper nouns that aren't character names
+        "hollywood",
+        "netflix",
+        "amazon",
+        "google",
+        "microsoft",
+        "apple",
+        "discord",
     }
 )
 
-# location extraction stopwords
-LOCATION_STOPWORDS: frozenset[str] = NAME_STOPWORDS | frozenset(
-    {"not", "but", "so", "if", "then", "than", "by", "on", "up", "out"}
-)
-
-# combined deny set for fast lookup
+# combined deny set
 _NAME_DENY: frozenset[str] = NAME_STOPWORDS | RELATION_WORDS | FALSE_NAME_WORDS
 
+# location stopwords
+LOCATION_STOPWORDS: frozenset[str] = NAME_STOPWORDS | frozenset(
+    {
+        "not",
+        "but",
+        "so",
+        "if",
+        "then",
+        "than",
+        "by",
+        "on",
+        "up",
+        "out",
+        "its",
+        "itself",
+        "himself",
+        "herself",
+        "themselves",
+        "ourselves",
+        "yourself",
+    }
+)
 
+
+# public helpers
 def is_valid_name(word: str) -> bool:
-    # min 3 chars, starts uppercase, alpha only
+    """check if word looks like a valid name (3-30 chars, uppercase start, alpha only)"""
     return (
-        len(word) >= 3
+        3 <= len(word) <= 30
         and word[0].isupper()
         and word.isalpha()
         and word.lower() not in _NAME_DENY
     )
+
+
+def normalise_name(raw: str) -> str:
+    """strip punctuation and title-case a raw name token."""
+    cleaned = raw.strip(".,!?;:\"'()[]{}")
+    return cleaned.title() if cleaned else raw
